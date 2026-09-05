@@ -308,7 +308,15 @@ function Conn:recv(timeout)
         elseif f.opcode == M.OPCODE.CLOSE then
             self.closed = true
             pcall(function() self.sock:send(M.encode_frame(M.OPCODE.CLOSE, "")) end)
-            return nil, "closed"
+            -- The close payload is a 2-byte status code and a UTF-8 reason:
+            -- the one place the service says why it hung up.
+            local code, reason
+            if #f.payload >= 2 then
+                code = f.payload:byte(1) * 256 + f.payload:byte(2)
+                reason = f.payload:sub(3)
+            end
+            self.close_code, self.close_reason = code, reason
+            return nil, "closed", { code = code, reason = reason }
         else
             if f.opcode ~= M.OPCODE.CONTINUATION then
                 mopcode = f.opcode

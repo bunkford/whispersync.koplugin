@@ -305,7 +305,8 @@ M.FIRST_TIMEOUT = 12   -- seconds to wait for the service's first message
 function M.is_refusal(err)
     err = tostring(err or "")
     return err:find("no audio", 1, true) ~= nil or err:find("refused", 1, true) ~= nil
-        or err:find("did not answer", 1, true) ~= nil
+        or err:find("did not answer", 1, true) ~= nil or err:find("without audio", 1, true) ~= nil
+        or err:find("closed the connection", 1, true) ~= nil
 end
 
 --- Speak `text`. opts: voice, speed (1.0), format (M.FORMATS.*), timeout
@@ -336,10 +337,11 @@ function M.synthesize(text, opts)
             if ok then ok, serr = conn:send_text(M.ssml_message(M.connect_id(), now, M.ssml(voice, text, opts.speed, opts.pitch))) end
             if not ok then conn:close(); return nil, "send: " .. tostring(serr) end
             local first = true
+            local close_info
             while true do
-                local opcode, payload = conn:recv(first and (opts.first_timeout or M.FIRST_TIMEOUT) or nil)
+                local opcode, payload, info = conn:recv(first and (opts.first_timeout or M.FIRST_TIMEOUT) or nil)
                 if not opcode then
-                    if payload == "closed" then break end
+                    if payload == "closed" then close_info = info or {}; break end
                     conn:close()
                     if payload == "timeout" then
                         if first then
@@ -369,7 +371,12 @@ function M.synthesize(text, opts)
             conn:close()
             local bytes = table.concat(audio)
             if #bytes == 0 then
-                return nil, closed_ok and ("the service sent no audio (format " .. format .. " refused?)") or "connection ended without audio"
+                if closed_ok then return nil, "the service sent no audio (format " .. format .. " refused?)" end
+                if close_info and close_info.code then
+                    return nil, ("the service closed the connection: %d %s (format %s)"):format(close_info.code,
+                        (close_info.reason and close_info.reason ~= "") and close_info.reason or "no reason given", format)
+                end
+                return nil, "connection ended without audio (format " .. format .. ")"
             end
             table.sort(words, function(a, b) return a.t0 < b.t0 end)
             return { audio = bytes, words = words, format = format, duration = M.duration(format, #bytes), voice = voice,

@@ -3,6 +3,16 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.1.2
+
+- **A hang-up counts as a refusal.** When the service closes the connection
+  without sending audio ("connection ended without audio"), the next output
+  format is now tried instead of giving up, so a refused raw-PCM request
+  falls through to MP3.
+- **The close reason is shown.** The WebSocket close frame's status code and
+  text, the one place the service says why it hung up, now appear in the
+  error and in the voice test's report.
+
 ## 0.1.1
 
 Fixes the first-run failure "wantread": luasec's name for a read that timed

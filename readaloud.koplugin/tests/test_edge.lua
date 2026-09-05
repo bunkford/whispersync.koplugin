@@ -79,6 +79,19 @@ H.eq(sent.closed, true, "connection closed")
 -- No audio -> clear error
 local none, nerr = edge.synthesize("x", { connect = scripted({ { ws.OPCODE.TEXT, "Path:turn.end\r\n\r\n" } }, {}), json_decode = json.decode, format = edge.FORMATS.pcm })
 H.eq(none, nil, "no audio is an error"); H.ok(nerr:find("no audio"), "with a reason: " .. tostring(nerr))
+-- The service hanging up carries its reason out of the close frame
+local hung = edge.synthesize("x", { connect = function()
+    return { send_text = function() return true end, close = function() end,
+             recv = function() return nil, "closed", { code = 1007, reason = "Unsupported output format" } end }
+end, json_decode = json.decode, format = edge.FORMATS.pcm })
+H.eq(select(2, edge.synthesize("x", { connect = function()
+    return { send_text = function() return true end, close = function() end,
+             recv = function() return nil, "closed", { code = 1007, reason = "Unsupported output format" } end }
+end, json_decode = json.decode, format = edge.FORMATS.pcm })), "the service closed the connection: 1007 Unsupported output format (format raw-24khz-16bit-mono-pcm)", "close code and reason surfaced")
+H.eq(edge.is_refusal("the service closed the connection: 1007 x (format y)"), true, "a hang-up counts as a refusal (next format is tried)")
+H.eq(edge.is_refusal("connection ended without audio (format y)"), true, "so does a bare drop")
+H.eq(edge.is_refusal("connect: refused by proxy"), true, "'refused' matches too (harmless: the next format fails the same way fast)")
+H.eq(edge.is_refusal("tls handshake: wantread"), false, "network trouble is not a refusal")
 -- 403 with a Date header teaches the clock skew and retries once
 local calls = 0
 local skewed = function(url, opts)

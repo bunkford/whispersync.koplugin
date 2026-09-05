@@ -85,6 +85,13 @@ local c = assert(ws.connect("ws://h.example/x", { headers = {} }))
 local op, msg = c:recv()
 H.eq(op, ws.OPCODE.TEXT, "fragmented text reassembled as text"); H.eq(msg, "Hello", "fragments joined across a ping")
 H.ok(sent[2] and sent[2]:byte(1) == 0x8A, "ping answered with a masked pong")
-local op2, why = c:recv()
-H.eq(op2, nil, "close frame ends the stream"); H.eq(why, "closed", "reported as closed")
+local op2, why, info = c:recv()
+H.eq(op2, nil, "close frame ends the stream"); H.eq(why, "closed", "reported as closed"); H.eq(info.code, nil, "empty close payload: no code")
+-- close with a status code and reason
+local closing = ws.encode_frame(ws.OPCODE.CLOSE, string.char(3, 239) .. "Unsupported output format", false)
+data = closing; fake.pos = 1
+li = 0
+local c2 = assert(ws.connect("ws://h.example/x", { headers = {} }))
+local _, _, cinfo = c2:recv()
+H.eq(cinfo.code, 1007, "close status code decoded"); H.eq(cinfo.reason, "Unsupported output format", "close reason decoded")
 H.done("test_ws")
