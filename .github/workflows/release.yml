@@ -5,7 +5,9 @@
 # tag is then created by the release itself).
 # Steps: run the desktop tests, check the tag matches _meta.lua, build
 # whispersync.koplugin.zip, create the GitHub release with the asset, then
-# regenerate zenpm/ on the default branch so ZenPM's manifest points at it.
+# regenerate zenpm/ on the default branch so ZenPM's manifest points at it,
+# and redeploy it to GitHub Pages (a workflow's own commit never triggers
+# the pages workflow, so this one has to do it).
 name: release
 
 on:
@@ -20,6 +22,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   release:
@@ -96,3 +100,28 @@ jobs:
           git add zenpm
           git commit -m "ZenPM manifest: Kindle Whispersync ${{ steps.build.outputs.VERSION }}" || echo "manifest unchanged"
           git push origin "$DEFAULT"
+
+  pages:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') || inputs.publish == true
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/configure-pages@v5
+      - name: Site root is zenpm/
+        run: |
+          touch zenpm/.nojekyll
+          cp zenpm/manifest.json zenpm/index.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: zenpm
+      - id: deployment
+        uses: actions/deploy-pages@v4
