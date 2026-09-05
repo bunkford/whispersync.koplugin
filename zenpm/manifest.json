@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "repo": {
-    "id": "bunkford-whispersync",
-    "name": "Kindle Whispersync",
+    "id": "bunkford-koreader-plugins",
+    "name": "bunkford's KOReader plugins",
     "url": "https://bunkford.github.io/whispersync.koplugin/"
   },
   "packages": [
@@ -21,7 +21,7 @@
       "source_type": "release",
       "source_asset": "whispersync.koplugin.zip",
       "plugin_module": "whispersync",
-      "published_at": "2026-09-05T13:31:05Z",
+      "published_at": "",
       "readme_url": "packages/whispersync.koplugin/README.md",
       "release_notes_url": "packages/whispersync.koplugin/RELEASE_NOTES.md",
       "versions_url": "packages/whispersync.koplugin/versions.json",
