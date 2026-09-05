@@ -1,0 +1,98 @@
+# Publish a Kindle Whispersync release for ZenPM.
+#
+# Trigger: push a tag vX.Y.Z (tools/release.sh does this), or run it by hand
+# with "publish" ticked to release the version currently in _meta.lua (the
+# tag is then created by the release itself).
+# Steps: run the desktop tests, check the tag matches _meta.lua, build
+# whispersync.koplugin.zip, create the GitHub release with the asset, then
+# regenerate zenpm/ on the default branch so ZenPM's manifest points at it.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a release for the version in _meta.lua (creates tag v<version>)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install LuaJIT and Python cryptography
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q luajit zip
+          python3 -m pip install --quiet cryptography
+
+      - name: Run plugin tests
+        run: sh whispersync.koplugin/tests/run.sh
+
+      - name: Build the plugin archive
+        id: build
+        run: sh tools/build_plugin.sh --print >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether this run publishes
+        id: mode
+        run: |
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            if [ "${TAG#v}" != "${{ steps.build.outputs.VERSION }}" ]; then
+              echo "tag $TAG does not match _meta.lua version ${{ steps.build.outputs.VERSION }}" >&2
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=v${{ steps.build.outputs.VERSION }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release notes for this version
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          awk -v v="${{ steps.build.outputs.VERSION }}" '
+            $0 ~ "^## " { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }' whispersync.koplugin/CHANGELOG.md > dist/notes.md
+          [ -s dist/notes.md ] || echo "Kindle Whispersync ${{ steps.build.outputs.VERSION }}" > dist/notes.md
+
+      - name: Create the GitHub release
+        if: steps.mode.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.mode.outputs.tag }}
+          name: Kindle Whispersync ${{ steps.build.outputs.VERSION }}
+          body_path: dist/notes.md
+          files: dist/whispersync.koplugin.zip
+
+      - name: Regenerate the ZenPM manifest on the default branch
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          TAG="${{ steps.mode.outputs.tag }}"
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$DEFAULT"
+          git checkout "$DEFAULT"
+          python3 tools/zenpm_manifest.py \
+            --tag "$TAG" \
+            --asset-url "https://github.com/${{ github.repository }}/releases/download/$TAG/whispersync.koplugin.zip" \
+            --size "${{ steps.build.outputs.SIZE }}" \
+            --sha256 "${{ steps.build.outputs.SHA256 }}" \
+            --source "https://github.com/${{ github.repository }}" \
+            --repo-url "https://raw.githubusercontent.com/${{ github.repository }}/$DEFAULT/zenpm/"
+          git add zenpm
+          git commit -m "ZenPM manifest: Kindle Whispersync ${{ steps.build.outputs.VERSION }}" || echo "manifest unchanged"
+          git push origin "$DEFAULT"

@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "repo": {
+    "id": "bunkford-whispersync",
+    "name": "Kindle Whispersync",
+    "url": "https://raw.githubusercontent.com/bunkford/whispersync.koplugin/main/zenpm/"
+  },
+  "packages": [
+    {
+      "id": "whispersync",
+      "name": "Kindle Whispersync",
+      "version": "0.1.0",
+      "description": "Read your Send-to-Kindle library straight from Amazon and keep reading position, bookmarks, highlights and notes in sync with your Kindle account.",
+      "author": "bunkford",
+      "category": "utility",
+      "platforms": [
+        "koreader"
+      ],
+      "dependencies": [],
+      "source": "https://github.com/bunkford/whispersync.koplugin",
+      "source_type": "release",
+      "source_asset": "whispersync.koplugin.zip",
+      "plugin_module": "whispersync",
+      "published_at": "2026-09-05T00:04:59Z",
+      "readme_url": "packages/whispersync.koplugin/README.md",
+      "release_notes_url": "packages/whispersync.koplugin/RELEASE_NOTES.md",
+      "versions_url": "packages/whispersync.koplugin/versions.json",
+      "size": "",
+      "assets": [
+        {
+          "arch": "any",
+          "asset": "whispersync.koplugin.zip",
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.1.0/whispersync.koplugin.zip",
+          "size": ""
+        }
+      ]
+    }
+  ]
+}

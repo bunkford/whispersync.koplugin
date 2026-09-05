@@ -1,0 +1,14 @@
+{
+  "releases": [
+    {
+      "tag_name": "v0.1.0",
+      "name": "v0.1.0",
+      "assets": [
+        {
+          "name": "whispersync.koplugin.zip",
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.1.0/whispersync.koplugin.zip"
+        }
+      ]
+    }
+  ]
+}
