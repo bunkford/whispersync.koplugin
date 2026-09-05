@@ -3,6 +3,14 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.1.4
+
+- **Amazon's player is asked four ways.** When MP3 goes to playermgr over
+  LIPC, the file is now offered as Open+Play with a path and with a file://
+  URI, then as Play with either, and the player gets a moment to start before
+  each attempt is judged. The failure message lists what the player reported
+  for each, and points at Bluetooth being off or the silent mode.
+
 ## 0.1.3
 
 - **Follow the words without sound.** *Audio → Follow the words without

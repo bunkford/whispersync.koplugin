@@ -184,6 +184,46 @@ local function kindle_focus()
     focus_taken = true
 end
 
+--- Amazon's player, driven over LIPC. playermgr is what plays Audible on the
+-- device; whether it takes an MP3 handed to it this way, and how it wants
+-- the path, is only known from trying, so several shapes are tried in turn
+-- (the same ones the audiobook plugin walks) and InPlayback is polled for a
+-- moment after each. The failure message carries what the player reported.
+function M.lipc_query(prop)
+    local p = io.popen("lipc-get-prop com.lab126.playermgr " .. prop .. " 2>&1")
+    local out = p and p:read("*a") or ""
+    if p then p:close() end
+    return (out:gsub("%s+$", ""))
+end
+
+function M.start_lipc(plan, file)
+    kindle_focus()
+    os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
+    local uri = "file://" .. file
+    local attempts = {
+        { "Open+Play (path)", "lipc-set-prop com.lab126.playermgr Open " .. sh_quote(file), "lipc-set-prop com.lab126.playermgr Play ''" },
+        { "Open+Play (uri)", "lipc-set-prop com.lab126.playermgr Open " .. sh_quote(uri), "lipc-set-prop com.lab126.playermgr Play ''" },
+        { "Play (uri)", nil, "lipc-set-prop com.lab126.playermgr Play " .. sh_quote(uri) },
+        { "Play (path)", nil, "lipc-set-prop com.lab126.playermgr Play " .. sh_quote(file) },
+    }
+    local seen = {}
+    for _, at in ipairs(attempts) do
+        if at[2] then os.execute(at[2] .. " 2>/dev/null") end
+        os.execute(at[3] .. " 2>/dev/null")
+        -- Give it up to ~1.5 s to spin up before deciding.
+        for _ = 1, 5 do
+            os.execute("usleep 300000 2>/dev/null || sleep 0.3")
+            if M.lipc_query("InPlayback"):match("^%s*1") then
+                return { lipc = true, started = M.now(), plan = plan, file = file, seek = 0, latency = plan.latency, player = "lipc", how = at[1] }
+            end
+        end
+        seen[#seen + 1] = at[1] .. "=" .. M.lipc_query("InPlayback")
+        os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
+    end
+    return nil, ("Amazon's player (playermgr) did not start playing the MP3 [%s; TTS_State=%s]. With Bluetooth off there is no output for it; pair a speaker, or use 'Follow the words without sound'.")
+        :format(table.concat(seen, ", "), M.lipc_query("TTS_State"))
+end
+
 --- Start playing. Returns a handle { pid, started, plan, file } or nil, err.
 -- `seek` seconds; for Kindle PCM the padded temp file is built here.
 function M.start(plan, file, fmt, seek, tmpdir)
@@ -195,18 +235,7 @@ function M.start(plan, file, fmt, seek, tmpdir)
         return { silent = true, started = M.now(), plan = plan, file = file, seek = seek, latency = 0, player = "silent" }
     end
     if player == "lipc" then
-        kindle_focus()
-        os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
-        os.execute("lipc-set-prop com.lab126.playermgr Open " .. sh_quote(file) .. " 2>/dev/null")
-        os.execute("lipc-set-prop com.lab126.playermgr Play '' 2>/dev/null")
-        local p = io.popen("lipc-get-prop com.lab126.playermgr InPlayback 2>/dev/null")
-        local out = p and p:read("*a") or ""
-        if p then p:close() end
-        if not out:match("^%s*1") then
-            os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
-            return nil, "Amazon's player (playermgr) did not start playing the MP3"
-        end
-        return { lipc = true, started = M.now(), plan = plan, file = file, seek = 0, latency = plan.latency }
+        return M.start_lipc(plan, file)
     end
     local play_file = file
     if player == "gst" then
