@@ -27,13 +27,40 @@ feature off instead of breaking anything:
 
 local M = {}
 
-local function zen_plugin()
-    return rawget(_G, "__ZEN_UI_PLUGIN")
+-- ZenOS registers itself with KOReader under its plugin name ("zenos", or
+-- "zen_ui" for the legacy package), so the running instance lives on the
+-- FileManager / ReaderUI it was created for. The __ZEN_UI_PLUGIN global only
+-- exists while ZenOS loads its own features, so it is a last resort here.
+M.PLUGIN_NAMES = { "zenos", "zen_ui" }
+M.UI_MODULES = { "apps/filemanager/filemanager", "apps/reader/readerui" }
+
+local function has_config(p)
+    return type(p) == "table" and type(p.config) == "table"
 end
 
+local function zen_plugin()
+    for _, mod in ipairs(M.UI_MODULES) do
+        local app = package.loaded[mod]
+        local ui = type(app) == "table" and app.instance or nil
+        if type(ui) == "table" then
+            for _, name in ipairs(M.PLUGIN_NAMES) do
+                if has_config(ui[name]) then return ui[name] end
+            end
+        end
+    end
+    local g = rawget(_G, "__ZEN_UI_PLUGIN")
+    if has_config(g) then return g end
+    return nil
+end
+M.plugin = zen_plugin
+
+--- Is ZenOS running? True when its plugin instance is reachable, or when its
+-- Home widget registry (installed at ZenOS start-up) is present.
 function M.available()
-    local plugin = zen_plugin()
-    return type(plugin) == "table" and type(plugin.config) == "table"
+    if zen_plugin() then return true end
+    return type(rawget(_G, "__ZENOS_REGISTER_HOME_ITEM")) == "function"
+        or type(rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")) == "function"
+        or rawget(_G, "__ZEN_UI_LIBRARY_FONT_CFG") ~= nil
 end
 
 -------------------------------------------------------------------------------

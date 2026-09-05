@@ -32,6 +32,22 @@ local saves = 0
 local plugin = { config = { navbar = { show_tabs = { books = true, home = true }, tab_order = { "books", "home", "menu" } } },
                  saveConfig = function() saves = saves + 1 end }
 H.eq(Zen.available(), false, "no live ZenOS in tests")
+-- Detection: ZenOS's instance sits on the FileManager/ReaderUI under its plugin name;
+-- the __ZEN_UI_PLUGIN global is only set while ZenOS loads its own features.
+package.loaded["apps/filemanager/filemanager"] = { instance = { zenos = { config = { navbar = {} } } } }
+H.eq(Zen.available(), true, "ZenOS found via FileManager.instance.zenos")
+H.eq(Zen.plugin(), package.loaded["apps/filemanager/filemanager"].instance.zenos, "plugin() returns that instance")
+package.loaded["apps/filemanager/filemanager"] = { instance = { zen_ui = { config = {} } } }
+H.ok(Zen.plugin() ~= nil, "legacy zen_ui name works too")
+package.loaded["apps/filemanager/filemanager"] = nil
+package.loaded["apps/reader/readerui"] = { instance = { zenos = { config = {} } } }
+H.ok(Zen.plugin() ~= nil, "found on ReaderUI when reading")
+package.loaded["apps/reader/readerui"] = nil
+H.eq(Zen.plugin(), nil, "gone again")
+rawset(_G, "__ZENOS_REGISTER_HOME_ITEM", function() end)
+H.eq(Zen.available(), true, "Home registry alone proves ZenOS is running"); H.eq(Zen.plugin(), nil, "but gives no settings")
+rawset(_G, "__ZENOS_REGISTER_HOME_ITEM", nil)
+H.eq(Zen.available(), false, "clean again")
 local ok, msg = Zen.addKindleTab("/mnt/us/koreader/kindle-library", "Kindle", plugin)
 H.ok(ok, "tab added: " .. tostring(msg))
 local nav = plugin.config.navbar

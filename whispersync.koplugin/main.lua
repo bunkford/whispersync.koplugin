@@ -172,6 +172,25 @@ function Whispersync:init()
         self.ui.menu:registerToMainMenu(self)
     end
     self:registerZenOS()
+    self:scheduleZenHooks()
+end
+
+-- ZenOS loads after this plugin (plugins load alphabetically) and announces
+-- nothing when it is up, so the hooks are retried for a while after start-up
+-- until both report in.
+Whispersync.ZEN_RETRY_DELAYS = { 1, 3, 8, 20, 60 }
+
+function Whispersync:scheduleZenHooks(attempt)
+    attempt = attempt or 1
+    local delay = Whispersync.ZEN_RETRY_DELAYS[attempt]
+    if not delay then return end
+    self._zen_retry = guarded(function()
+        self._zen_retry = nil
+        self:registerZenOS()
+        local st = Zen.bannerStatus()
+        if not (st.library and st.home) then self:scheduleZenHooks(attempt + 1) end
+    end, "zen hooks")
+    UIManager:scheduleIn(delay, self._zen_retry)
 end
 
 function Whispersync:isKindleFile(path)
@@ -501,13 +520,16 @@ function Whispersync:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text_func = function()
-                    local plugin = rawget(_G, "__ZEN_UI_PLUGIN")
+                    local plugin = Zen.plugin()
                     local have = plugin and Zen.findFolderTab(plugin.config, self:libraryDir())
                     return have and _("Kindle tab in the navbar: added") or _("Add a Kindle tab to the navbar")
                 end,
                 help_text = _("A native ZenOS folder tab pointing at the download folder: your Kindle books in ZenOS's own cover view, with its sorting and badges. Takes effect after KOReader restarts."),
                 callback = guarded(function()
-                    if not Zen.available() then notify(_("ZenOS is not running."), 4); return end
+                    if not Zen.plugin() then
+                        notify(Zen.available() and _("ZenOS is running but its settings could not be reached; try again from the file browser.") or _("ZenOS is not running."), 6)
+                        return
+                    end
                     local ok, msg = Zen.addKindleTab(self:libraryDir(), _("Kindle"))
                     if ok then
                         notify(msg == "already there" and _("The Kindle tab is already in the navbar.")
@@ -1574,6 +1596,7 @@ function Whispersync:onNetworkConnected()
 end
 
 function Whispersync:onCloseWidget()
+    if self._zen_retry then UIManager:unschedule(self._zen_retry); self._zen_retry = nil end
     UIManager:unschedule(self.push_task)
     self:stopConnectServer()
 end
