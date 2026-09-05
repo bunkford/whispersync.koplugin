@@ -79,6 +79,7 @@ local function ko()
         HorizontalSpan = require("ui/widget/horizontalspan"),
         ImageWidget = require("ui/widget/imagewidget"),
         InputContainer = require("ui/widget/container/inputcontainer"),
+        OverlapGroup = require("ui/widget/overlapgroup"),
         RenderImage = require("ui/renderimage"),
         Size = require("ui/size"),
         TextBoxWidget = require("ui/widget/textboxwidget"),
@@ -284,6 +285,9 @@ function S:cell(item)
     local dim = o.dim_func and o.dim_func(item) or false
 
     local cover = self:cover(item, title, dim)
+    if o.badge_func and o.badge_func(item) then
+        cover = Shelf.with_badge(cover, L.cover_w, L.cover_h)
+    end
     local group = W.VerticalGroup:new{ align = "left", cover }
     if W.ProgressWidget then
         group[#group + 1] = W.ProgressWidget:new{
@@ -316,6 +320,23 @@ function S:cell(item)
     cell.onTapCell = function() if o.on_open then o.on_open(item, self) end; return true end
     cell.onHoldCell = function() if o.on_hold then o.on_hold(item, self) end; return true end
     return cell
+end
+
+--- Wrap a cover widget with a small round "K" badge at its bottom-left.
+function Shelf.with_badge(cover, cover_w, cover_h)
+    local W = ko()
+    local size = math.max(W.Screen:scaleBySize(16), math.floor(cover_w * 0.14))
+    local inset = math.max(2, math.floor(size * 0.18))
+    local badge = W.FrameContainer:new{
+        background = W.Blitbuffer.COLOR_BLACK, color = W.Blitbuffer.COLOR_WHITE,
+        bordersize = 2, radius = math.floor(size / 2), padding = 0,
+        width = size, height = size,
+        W.CenterContainer:new{ dimen = W.Geom:new{ w = size - 4, h = size - 4 },
+            W.TextWidget:new{ text = "K", face = W.Font:getFace("cfont", math.max(7, math.floor(size * 0.55))),
+                bold = true, fgcolor = W.Blitbuffer.COLOR_WHITE, padding = 0 } },
+        overlap_offset = { inset, cover_h - size - inset },
+    }
+    return W.OverlapGroup:new{ dimen = W.Geom:new{ w = cover_w, h = cover_h }, cover, badge }
 end
 
 --- Cover image from file, or a framed placeholder carrying the title.
@@ -391,6 +412,9 @@ function Shelf.build_strip(ctx, items, opts)
                         alignment = "center", height = cover_h - 2 * padding, height_overflow_show_ellipsis = true },
                 },
             }
+        end
+        if opts.badge_func and opts.badge_func(item) then
+            cover = Shelf.with_badge(cover, cover_w, cover_h)
         end
         local percent = opts.percent_func and opts.percent_func(item) or nil
         local label = percent and ("%d%%"):format(math.floor(percent + 0.5)) or (opts.status_func and opts.status_func(item) or "")

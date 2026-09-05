@@ -15,6 +15,7 @@ Modules:
   catalog.lua        what the shelf knows about each book, sorting, status text
   shelf.lua          the cover grid, and the ZenOS Home strip
   connectdialog.lua  QR code + instructions + live status on one screen
+  zenos.lua          ZenOS navbar tab, cover badge, history/progress hand-off
 
 Everything Amazon-facing follows the rules established live in this repo's
 README ("Pushing progress back to your Kindle"); see amazon.lua for the list.
@@ -52,6 +53,7 @@ local BookSync = require("booksync")
 local Catalog = require("catalog")
 local Shelf = require("shelf")
 local ConnectDialog = require("connectdialog")
+local Zen = require("zenos")
 
 local Whispersync = WidgetContainer:extend{
     name = "whispersync",
@@ -84,6 +86,10 @@ local DEFAULT_SETTINGS = {
     downloaded_only = false,
     sort = "recent",
     library_dir = nil,         -- default computed below
+    keep_on_device = true,     -- download every personal document, so the native library shows them all
+    download_cap_mb = 40,      -- but skip anything larger than this when doing so automatically
+    kindle_badge = true,       -- "K" badge on Kindle books' covers (shelf, Home strip, ZenOS tiles)
+    feed_history = true,       -- Amazon read times/progress into KOReader history and sidecars
 }
 
 -------------------------------------------------------------------------------
@@ -167,6 +173,17 @@ function Whispersync:init()
     self:registerZenOS()
 end
 
+function Whispersync:isKindleFile(path)
+    if not path then return false end
+    if not self._kindle_files then
+        self._kindle_files = {}
+        for _, it in pairs(self.catalog) do
+            if it.file then self._kindle_files[it.file] = true end
+        end
+    end
+    return self._kindle_files[path] == true
+end
+
 function Whispersync:loadSettings()
     self.store = LuaSettings:open(self.settings_file)
     self.settings = self.store:readSetting("settings") or {}
@@ -180,6 +197,7 @@ function Whispersync:loadSettings()
 end
 
 function Whispersync:saveSettings()
+    self._kindle_files = nil
     self.store:saveSetting("settings", self.settings)
     self.store:saveSetting("device", self.device)
     self.store:saveSetting("catalog", self.catalog)
@@ -244,6 +262,10 @@ end
 --- Offer a "Kindle library" strip for the ZenOS Home page. Safe to call any
 -- number of times; ZenOS replaces the builder for an existing id.
 function Whispersync:registerZenOS()
+    -- Cover badge on ZenOS's own library tiles (no-op until ZenOS's renderer exists).
+    pcall(Zen.installCoverBadge,
+        function(path) local inst = Whispersync.liveInstance() or self; return inst:isKindleFile(path) end,
+        function() local inst = Whispersync.liveInstance() or self; return inst.settings.kindle_badge end)
     local register = rawget(_G, "__ZENOS_REGISTER_HOME_ITEM") or rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")
     if type(register) ~= "function" then return false end
     local ok = pcall(register, "whispersync.shelf", function(ctx)
@@ -263,6 +285,7 @@ function Whispersync:buildZenStrip(ctx)
         cover_func = function(it) return file_exists(it.cover) and it.cover or nil end,
         percent_func = Catalog.percent,
         status_func = function(it) return Catalog.status_text(it, { exists = file_exists }) end,
+        badge_func = function() return self.settings.kindle_badge end,
         on_open = function(it) self:openItem(it) end,
         on_empty_tap = function() self:showShelf() end,
         empty_text = self:isConnected() and _("Kindle library\nTap to open") or _("Kindle library\nTap to connect"),
@@ -376,8 +399,55 @@ function Whispersync:addToMainMenu(menu_items)
                 callback = function() self.settings.show_store_books = not self.settings.show_store_books; self:saveSettings() end,
             },
             {
+                text = _("Keep every personal document on this device"),
+                help_text = _("Downloads all Send-to-Kindle documents during a refresh, so the native library, Recent and search see them. Large files are skipped."),
+                checked_func = function() return self.settings.keep_on_device end,
+                callback = function() self.settings.keep_on_device = not self.settings.keep_on_device; self:saveSettings() end,
+            },
+            {
+                text = _("Feed Amazon read times and progress into history"),
+                help_text = _("Downloaded Kindle books appear in KOReader's history (and ZenOS Home → Recent) at the time they were last read on a Kindle, with their progress."),
+                checked_func = function() return self.settings.feed_history end,
+                callback = function() self.settings.feed_history = not self.settings.feed_history; self:saveSettings() end,
+            },
+            {
+                text = _("Kindle badge on covers"),
+                checked_func = function() return self.settings.kindle_badge end,
+                callback = function() self.settings.kindle_badge = not self.settings.kindle_badge; self:saveSettings(); if self.shelf then self.shelf:refresh() end end,
+                separator = true,
+            },
+            {
                 text = _("Refresh library, covers and progress from Amazon"),
                 callback = guarded(function() self:refreshLibrary({ positions = true, force = true }) end, "refresh"),
+            },
+        },
+    }
+
+    sub[#sub + 1] = {
+        text = _("ZenOS"),
+        enabled_func = function() return Zen.available() end,
+        sub_item_table = {
+            {
+                text_func = function()
+                    local plugin = rawget(_G, "__ZEN_UI_PLUGIN")
+                    local have = plugin and Zen.findFolderTab(plugin.config, self:libraryDir())
+                    return have and _("Kindle tab in the navbar: added") or _("Add a Kindle tab to the navbar")
+                end,
+                help_text = _("A native ZenOS folder tab pointing at the download folder: your Kindle books in ZenOS's own cover view, with its sorting and badges. Takes effect after KOReader restarts."),
+                callback = guarded(function()
+                    local ok, msg = Zen.addKindleTab(self:libraryDir(), _("Kindle"))
+                    if ok then
+                        notify(msg == "already there" and _("The Kindle tab is already in the navbar.")
+                            or T(_("Kindle tab %1. Restart KOReader to see it."), msg), 6)
+                    else
+                        notify(T(_("Could not add the tab: %1"), tostring(msg)), 6)
+                    end
+                end, "zen tab"),
+            },
+            {
+                text = _("Kindle library strip on Home"),
+                help_text = _("Home → widgets → “Kindle library” adds a strip of your recent Kindle books; it is registered automatically."),
+                enabled = false,
             },
         },
     }
@@ -448,8 +518,10 @@ Limits
 • PDFs sent to Kindle have no MOBI text: they download and open, but positions are not synced.
 
 ZenOS
-• Launcher or Controls → Add → Plugin menu → Kindle Whispersync opens the shelf.
-• Home → widgets → "Kindle library" adds a strip of your recent Kindle books.]]),
+• Kindle Whispersync → ZenOS → Add a Kindle tab puts your downloaded Kindle books in ZenOS's own cover view as a navbar tab.
+• Home → widgets → "Kindle library" adds a strip of your recent Kindle books.
+• With "Keep every personal document on this device" and "Feed Amazon read times" on (both default), every Kindle book appears in the native library and in Home → Recent at the time it was last read on a Kindle, with a "K" badge on its cover.
+• Launcher or Controls → Add → Plugin menu → Kindle Whispersync opens the cloud shelf.]]),
             })
         end,
     }
@@ -830,6 +902,13 @@ function Whispersync:coversDir()
     return self:libraryDir() .. "/covers"
 end
 
+local function safe_filename(title, asin)
+    local name = (title or asin):gsub("[/\\:%*%?\"<>|%c]", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+    if #name > 120 then name = name:sub(1, 120) end
+    if name == "" then name = asin end
+    return name
+end
+
 --- Fetch everything immutable about a book once (header metadata and cover)
 -- and, when asked, its current position. Returns true if anything changed.
 function Whispersync:enrichItem(client, it, what)
@@ -933,6 +1012,31 @@ function Whispersync:refreshLibrary(opts)
             end
             self.library_meta.enriched_at = os.time()
             self:saveSettings()
+
+            -- Keep the whole library on the device, so the native library,
+            -- Recent and search see every book, not just the ones opened.
+            if self.settings.keep_on_device then
+                local cap = (tonumber(self.settings.download_cap_mb) or 40) * 1024 * 1024
+                local todo = {}
+                for _, it in ipairs(list) do
+                    if Catalog.is_document(it) and not file_exists(it.file) and not it.download_failed
+                        and it.not_mobi == nil and (not it.content_size or it.content_size <= cap) then
+                        todo[#todo + 1] = it
+                    end
+                end
+                for i, it in ipairs(todo) do
+                    if not Trapper:info(T(_("Downloading %1 of %2\n%3"), i, #todo, Catalog.title(it))) then break end
+                    local ok, err = pcall(self.downloadItemNow, self, client, it)
+                    if not ok or err then
+                        it.download_failed = true
+                        self:log("auto-download failed " .. it.asin .. ": " .. tostring(err))
+                    end
+                    if i % 3 == 0 then self:saveSettings() end
+                end
+                self:saveSettings()
+            end
+
+            self:feedHistory()
             Trapper:clear()
             if self.shelf then self.shelf:refresh() end
             if opts.then_cb then opts.then_cb() end
@@ -940,11 +1044,56 @@ function Whispersync:refreshLibrary(opts)
     end)
 end
 
-local function safe_filename(title, asin)
-    local name = (title or asin):gsub("[/\\:%*%?\"<>|%c]", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
-    if #name > 120 then name = name:sub(1, 120) end
-    if name == "" then name = asin end
-    return name
+--- Hand Amazon's read times and progress to KOReader's history and sidecars
+-- for every downloaded book (except the one open right now).
+function Whispersync:feedHistory()
+    if not self.settings.feed_history then return end
+    local open_file = self.ui and self.ui.document and self.ui.document.file or nil
+    local n = 0
+    for _, it in pairs(self.catalog) do
+        if Catalog.is_document(it) and file_exists(it.file) and (it.remote_epoch or Catalog.percent(it)) then
+            local ok, changed = pcall(Zen.recordHistory, it.file, it.remote_epoch, {
+                percent = Catalog.percent(it), no_flush = true,
+                is_open = function(f) return f == open_file end,
+            })
+            if ok and changed and (changed.history or changed.sidecar) then n = n + 1 end
+        end
+    end
+    pcall(Zen.flushHistory)
+    if n > 0 then self:log(("history/progress updated for %d book(s)"):format(n)) end
+end
+
+--- Synchronous download used inside a Trapper loop. Returns nil on success,
+-- an error string otherwise.
+function Whispersync:downloadItemNow(client, it)
+    local dir = self:libraryDir()
+    util.makePath(dir)
+    local base = dir .. "/" .. safe_filename(Catalog.title(it), it.asin)
+    local author = Catalog.author(it)
+    if author ~= "" then base = base .. " - " .. safe_filename(author, "") end
+    local tmp = base .. ".part"
+    local ok, derr = client:download(it.asin, it.content_type, tmp)
+    if not ok then return tostring(derr) end
+    local head = mobi.read_file(tmp, 32768) or ""
+    local final
+    if mobi.is_mobi(head) then
+        local hdr = mobi.parse_header(head)
+        if hdr and hdr.encrypted then os.remove(tmp); return "DRM-protected" end
+        final = base .. ".mobi"
+        if hdr then Catalog.apply_header(it, hdr) end
+    elseif head:sub(1, 4) == "%PDF" then
+        final = base .. ".pdf"
+    else
+        final = base .. ".bin"
+    end
+    os.remove(final)
+    if not os.rename(tmp, final) then return "could not save the file" end
+    it.file = final
+    it.downloaded_at = os.time()
+    self.catalog[it.asin] = it
+    self._kindle_files = nil
+    self:log("downloaded " .. Catalog.title(it))
+    return nil
 end
 
 --- Tap on a shelf item: open it, downloading first if needed.
@@ -1001,6 +1150,9 @@ function Whispersync:downloadItem(it, then_cb)
         self.catalog[it.asin] = it
         self:saveSettings()
         self:log("downloaded " .. Catalog.title(it))
+        if self.settings.feed_history and it.remote_epoch then
+            pcall(Zen.recordHistory, final, it.remote_epoch, { percent = Catalog.percent(it) })
+        end
         if self.shelf then self.shelf:refresh() end
         if final:sub(-4) == ".pdf" then
             notify(_("Saved. PDFs have no MOBI text, so positions are not synced for this one."), 6)
@@ -1071,6 +1223,7 @@ function Whispersync:showShelf()
         status_func = function(it) return Catalog.status_text(it, { exists = file_exists }) end,
         percent_func = Catalog.percent,
         dim_func = function(it) return not Catalog.is_document(it) end,
+        badge_func = function() return self.settings.kindle_badge end,
         cover_func = function(it) return file_exists(it.cover) and it.cover or nil end,
         on_open = guarded(function(it) self:openItem(it) end, "open"),
         on_hold = guarded(function(it) self:showDetails(it) end, "details"),

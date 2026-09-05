@@ -33,33 +33,46 @@ local ffi_ok, ffi = pcall(require, "ffi")
 local mime_ok, mime = pcall(require, "mime")
 
 local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local B64_DEC = {}
+for i = 1, 64 do B64_DEC[B64:byte(i)] = i - 1 end
 
+-- Plain table-driven base64. An earlier version built a string of "0"/"1"
+-- characters and pattern-matched it back; besides being slow on a 1.6 KB
+-- key, it crashed LuaJIT intermittently under garbage-collection pressure.
 local function b64_encode_pure(data)
-    return ((data:gsub(".", function(x)
-        local r, b = "", x:byte()
-        for i = 8, 1, -1 do r = r .. (b % 2 ^ i - b % 2 ^ (i - 1) > 0 and "1" or "0") end
-        return r
-    end) .. "0000"):gsub("%d%d%d?%d?%d?%d?", function(x)
-        if #x < 6 then return "" end
-        local c = 0
-        for i = 1, 6 do c = c + (x:sub(i, i) == "1" and 2 ^ (6 - i) or 0) end
-        return B64:sub(c + 1, c + 1)
-    end) .. ({ "", "==", "=" })[#data % 3 + 1])
+    local out, n = {}, 0
+    for i = 1, #data, 3 do
+        local a, b, c = data:byte(i, i + 2)
+        local v = a * 65536 + (b or 0) * 256 + (c or 0)
+        local c1 = math.floor(v / 262144) % 64
+        local c2 = math.floor(v / 4096) % 64
+        local c3 = math.floor(v / 64) % 64
+        local c4 = v % 64
+        n = n + 1
+        out[n] = B64:sub(c1 + 1, c1 + 1) .. B64:sub(c2 + 1, c2 + 1)
+            .. (b and B64:sub(c3 + 1, c3 + 1) or "=") .. (c and B64:sub(c4 + 1, c4 + 1) or "=")
+    end
+    return table.concat(out)
 end
 
 local function b64_decode_pure(data)
-    data = data:gsub("[^%w%+%/%=]", "")
-    return (data:gsub(".", function(x)
-        if x == "=" then return "" end
-        local r, f = "", (B64:find(x, 1, true) - 1)
-        for i = 6, 1, -1 do r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and "1" or "0") end
-        return r
-    end):gsub("%d%d%d?%d?%d?%d?%d?%d?", function(x)
-        if #x ~= 8 then return "" end
-        local c = 0
-        for i = 1, 8 do c = c + (x:sub(i, i) == "1" and 2 ^ (8 - i) or 0) end
-        return string.char(c)
-    end))
+    local out, n = {}, 0
+    local acc, bits = 0, 0
+    for i = 1, #data do
+        local v = B64_DEC[data:byte(i)]
+        if v then
+            acc = acc * 64 + v
+            bits = bits + 6
+            if bits >= 8 then
+                bits = bits - 8
+                local divisor = 2 ^ bits
+                n = n + 1
+                out[n] = string.char(math.floor(acc / divisor) % 256)
+                acc = acc % divisor
+            end
+        end
+    end
+    return table.concat(out)
 end
 
 function M.b64_encode(data)
@@ -141,6 +154,7 @@ end
 local function load_key(lib, raw)
     raw = raw:match("^%s*(.-)%s*$")
     local pkey
+    local keep_alive -- pins the DER buffer until the key object exists
     if raw:find("-----BEGIN", 1, true) then
         local bio = lib.BIO_new_mem_buf(raw, #raw)
         if bio == nil then return nil, "BIO_new_mem_buf failed" end
@@ -148,19 +162,26 @@ local function load_key(lib, raw)
         lib.BIO_free(bio)
     else
         local der = M.b64_decode(raw)
-        local buf = ffi.new("const unsigned char[?]", #der, der)
-        local pp = ffi.new("const unsigned char*[1]", buf)
+        -- Copy into a buffer we own. Initializing a VLA straight from the
+        -- (temporary) string — ffi.new("const unsigned char[?]", n, str) —
+        -- crashed LuaJIT intermittently once the string was collected.
+        local buf = ffi.new("unsigned char[?]", #der)
+        ffi.copy(buf, der, #der)
+        local pp = ffi.new("const unsigned char*[1]")
+        pp[0] = buf
         pkey = lib.d2i_AutoPrivateKey(nil, pp, #der)
         if pkey == nil then
             -- Some responses base64 a PEM block rather than DER.
-            local bio = lib.BIO_new_mem_buf(der, #der)
+            local bio = lib.BIO_new_mem_buf(buf, #der)
             if bio ~= nil then
                 pkey = lib.PEM_read_bio_PrivateKey(bio, nil, nil, nil)
                 lib.BIO_free(bio)
             end
         end
+        keep_alive = buf
     end
     if pkey == nil then return nil, "could not parse the device private key" end
+    local _ = keep_alive
     return pkey
 end
 
