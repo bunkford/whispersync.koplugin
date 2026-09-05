@@ -59,6 +59,14 @@ function M.plan(env)
     return { backend = "none", formats = { edge.FORMATS.mp3 }, latency = 0, reason = "no audio player found (ffplay, mpv, paplay or aplay)" }
 end
 
+--- A plan that plays nothing and just keeps time: the marker follows the
+-- words at the service's timing with no speaker attached (read-along mode,
+-- or a Kindle without Bluetooth on).
+function M.silent_plan()
+    local edge = require("edge")
+    return { backend = "silent", formats = { edge.FORMATS.mp3 }, latency = 0 }
+end
+
 --- Which player handles `fmt` under this plan: "gst", "ffmpeg-gst", "lipc",
 -- a desktop player name, or nil with a reason.
 function M.player_for(plan, fmt)
@@ -73,7 +81,7 @@ function M.player_for(plan, fmt)
         return nil, "raw audio needs gst-launch, which this Kindle lacks"
     end
     if plan.backend == "none" then return nil, plan.reason end
-    return plan.backend
+    return plan.backend -- desktop players and "silent"
 end
 
 --- GStreamer caps for our PCM, per gst generation.
@@ -101,8 +109,8 @@ function M.command(plan, file, fmt, seek)
     elseif player == "gst" then
         return ("%s filesrc location=%s ! capsfilter caps=%s ! mixersink stream-type=Music sync=true")
             :format(plan.gst, sh_quote(file), sh_quote(M.gst_caps(plan.gst, M.PCM_RATE, 1)))
-    elseif player == "lipc" then
-        return nil, "lipc is driven with lipc-set-prop, not a command line"
+    elseif player == "lipc" or player == "silent" then
+        return nil, player .. " has no command line"
     elseif player == "ffplay" then
         return ("ffplay -nodisp -autoexit -loglevel error -ss %.2f %s%s"):format(seek,
             fmt == edge.FORMATS.pcm and ("-f s16le -ar %d -ac 1 "):format(M.PCM_RATE) or "", sh_quote(file))
@@ -183,6 +191,9 @@ function M.start(plan, file, fmt, seek, tmpdir)
     seek = seek or 0
     local player, why = M.player_for(plan, fmt)
     if not player then return nil, why end
+    if player == "silent" then
+        return { silent = true, started = M.now(), plan = plan, file = file, seek = seek, latency = 0, player = "silent" }
+    end
     if player == "lipc" then
         kindle_focus()
         os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
@@ -236,6 +247,7 @@ end
 
 function M.running(handle)
     if not handle then return false end
+    if handle.silent then return true end -- the player decides by duration
     if handle.lipc then
         local p = io.popen("lipc-get-prop com.lab126.playermgr InPlayback 2>/dev/null")
         local out = p and p:read("*a") or ""
@@ -249,6 +261,7 @@ end
 
 function M.stop(handle)
     if not handle then return end
+    if handle.silent then return end
     if handle.lipc then
         os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
         return

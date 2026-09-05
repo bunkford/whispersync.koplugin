@@ -40,6 +40,13 @@ H.ok(A.command(A.plan(env(false, { "aplay" })), "/t.pcm", edge.FORMATS.pcm):find
 H.eq(select(2, A.command({ backend = "none", reason = "why" }, "/f", "x")), "why", "no backend -> reason")
 H.eq(A.sh_quote("it's"), "'it'\\''s'", "shell quoting")
 
+-- Silent plan: keeps time, plays nothing
+local sp = A.silent_plan()
+H.eq(sp.backend, "silent", "silent backend"); H.eq(A.player_for(sp, edge.FORMATS.mp3), "silent", "any format is 'played' silently")
+local sh = A.start(sp, "/nonexistent.mp3", edge.FORMATS.mp3, 2)
+H.eq(sh.silent, true, "silent handle"); H.eq(A.running(sh), true, "counts as running"); H.near(A.position(sh), 2, 0.05, "position runs from the seek point")
+A.stop(sh)
+
 -- PCM padding: half a second of zeros, then the file from the seek point, then a second of zeros
 local prep = A.prepare_pcm_command("/in.pcm", "/out.pcm", 2, false)
 H.eq(prep, "( dd if=/dev/zero bs=24000 count=1 2>/dev/null; tail -c +96001 '/in.pcm'; dd if=/dev/zero bs=48000 count=1 2>/dev/null ) > '/out.pcm' 2>/dev/null", "padded raw file command")

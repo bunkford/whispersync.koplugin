@@ -49,6 +49,7 @@ local DEFAULTS = {
     follow = true,          -- turn the page to the spoken word
     latency_adjust = 0,     -- seconds added to the backend's output latency
     format = nil,           -- the Edge output format the service last honoured
+    silent = false,         -- follow the words without playing sound
 }
 local SPEEDS = { 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 }
 local LOG_LINES = 80
@@ -110,6 +111,10 @@ end
 
 --- The audio plan for this device, detected once per session.
 function ReadAloud:plan()
+    if self.settings.silent then
+        self._plan = nil
+        return audio.silent_plan()
+    end
     if not self._plan then
         self._plan = audio.detect(Device:isKindle(), self:pluginDir())
         self._plan.latency = (self._plan.latency or 0) + (tonumber(self.settings.latency_adjust) or 0)
@@ -392,7 +397,18 @@ function ReadAloud:audioMenu()
         if self.player then self.player.opts.plan = self:plan() end
     end
     return {
-        { text = _("Play a test tone"), callback = function() self:testSound() end },
+        {
+            text = _("Follow the words without sound"),
+            help_text = _("Runs the reading at the voice's pace and marks each word, but plays nothing: read-along mode, or for when no speaker is connected. The voice is still fetched, for its word timing."),
+            checked_func = function() return self.settings.silent == true end,
+            callback = function()
+                self.settings.silent = not self.settings.silent
+                self:saveSettings()
+                if self.player then self.player.opts.plan = self:plan(); self.player.format_index = 1 end
+            end,
+            separator = true,
+        },
+        { text = _("Play a test tone"), enabled_func = function() return not self.settings.silent end, callback = function() self:testSound() end },
         { text = _("Audio output details"), callback = function() self:audioInfo() end },
         {
             text_func = function()
