@@ -92,7 +92,7 @@ jobs:
             --size "${{ steps.build.outputs.SIZE }}" \
             --sha256 "${{ steps.build.outputs.SHA256 }}" \
             --source "https://github.com/${{ github.repository }}" \
-            --repo-url "https://raw.githubusercontent.com/${{ github.repository }}/$DEFAULT/zenpm/"
+            --repo-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
           git add zenpm
           git commit -m "ZenPM manifest: Kindle Whispersync ${{ steps.build.outputs.VERSION }}" || echo "manifest unchanged"
           git push origin "$DEFAULT"

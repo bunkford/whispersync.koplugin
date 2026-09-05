@@ -38,7 +38,7 @@ PACKAGE_ID = "whispersync"
 MODULE = "whispersync"
 ASSET_NAME = "whispersync.koplugin.zip"
 DEFAULT_SOURCE = "https://github.com/bunkford/whispersync.koplugin"
-DEFAULT_REPO_URL = "https://raw.githubusercontent.com/bunkford/whispersync.koplugin/main/zenpm/"
+DEFAULT_REPO_URL = "https://bunkford.github.io/whispersync.koplugin/"
 
 # Same regex ZenPM applies to _meta.lua on the device.
 META_VERSION = re.compile(r"\bversion\s*=\s*[\"']([^\"']+)[\"']")

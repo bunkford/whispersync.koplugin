@@ -13,10 +13,11 @@ The plugin itself, with its full documentation, is in
 In ZenPM, **Sources → Add**:
 
 ```
-https://raw.githubusercontent.com/bunkford/whispersync.koplugin/main/zenpm/
+https://bunkford.github.io/whispersync.koplugin/
 ```
 
-then install **Kindle Whispersync**. Updates arrive through ZenPM's normal
+then install **Kindle Whispersync**. (The same repository is also served at
+`https://raw.githubusercontent.com/bunkford/whispersync.koplugin/main/zenpm/`.) Updates arrive through ZenPM's normal
 update checks whenever a new release is published here.
 
 ## Install by hand

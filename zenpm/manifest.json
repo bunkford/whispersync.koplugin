@@ -3,7 +3,7 @@
   "repo": {
     "id": "bunkford-whispersync",
     "name": "Kindle Whispersync",
-    "url": "https://raw.githubusercontent.com/bunkford/whispersync.koplugin/main/zenpm/"
+    "url": "https://bunkford.github.io/whispersync.koplugin/"
   },
   "packages": [
     {

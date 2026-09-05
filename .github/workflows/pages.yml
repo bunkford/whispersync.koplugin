@@ -1,0 +1,42 @@
+# Publish zenpm/ as the repository's GitHub Pages site, so ZenPM can be pointed
+# at the short, properly typed URL https://bunkford.github.io/whispersync.koplugin/
+# (manifest.json at the site root). Runs whenever zenpm/ changes on main,
+# which the release workflow does after every release.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["zenpm/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable Pages for this repository if needed
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Site root is zenpm/
+        run: |
+          touch zenpm/.nojekyll
+          cp zenpm/manifest.json zenpm/index.json
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: zenpm
+      - id: deployment
+        uses: actions/deploy-pages@v4
