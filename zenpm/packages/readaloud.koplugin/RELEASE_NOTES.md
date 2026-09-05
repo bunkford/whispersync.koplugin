@@ -3,6 +3,14 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.1.3
+
+- **Follow the words without sound.** *Audio → Follow the words without
+  sound* runs the reading at the voice's pace and marks each word but plays
+  nothing: a read-along mode, and the way to use the plugin on a Kindle with
+  Bluetooth off. Without it, a missing speaker made the player exit at once
+  and the marker race ahead.
+
 ## 0.1.2
 
 - **A hang-up counts as a refusal.** When the service closes the connection
