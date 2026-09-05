@@ -3,6 +3,21 @@
 Release notes for the Kindle Whispersync KOReader plugin. The newest release
 is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.2
+
+ZenOS is actually detected.
+
+- **"ZenOS (not running)" while it was.** ZenOS publishes the global this
+  plugin looked for only while loading its own features, then clears it, so
+  every ZenOS entry reported ZenOS missing and the cover banner never reached
+  ZenOS's screens. The plugin now finds ZenOS where KOReader keeps it, on the
+  file browser or reader it is attached to, and falls back to ZenOS's Home
+  widget registry.
+- **Hooks retried after start-up.** ZenOS loads after this plugin and does not
+  announce itself, so the banner hooks are retried for the first minute until
+  both the library and Home hooks report in. *ZenOS → Banner on ZenOS covers…*
+  shows the result.
+
 ## 0.2.1
 
 The Kindle mark reaches every ZenOS screen, and the ZenOS menu is tappable.

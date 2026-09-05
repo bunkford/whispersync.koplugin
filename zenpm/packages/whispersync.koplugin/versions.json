@@ -1,6 +1,18 @@
 {
   "releases": [
     {
+      "tag_name": "v0.2.2",
+      "name": "v0.2.2",
+      "assets": [
+        {
+          "name": "whispersync.koplugin.zip",
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.2.2/whispersync.koplugin.zip",
+          "size": 79430,
+          "digest": "sha256:95324809f3cb31fed6950ac52adec3dc006a1c39e94ca04056aeb99b7ea0396f"
+        }
+      ]
+    },
+    {
       "tag_name": "v0.2.1",
       "name": "v0.2.1",
       "assets": [

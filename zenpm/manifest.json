@@ -9,7 +9,7 @@
     {
       "id": "whispersync",
       "name": "Kindle Whispersync",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "Read your Send-to-Kindle library straight from Amazon and keep reading position, bookmarks, highlights and notes in sync with your Kindle account.",
       "author": "bunkford",
       "category": "utility",
@@ -21,17 +21,17 @@
       "source_type": "release",
       "source_asset": "whispersync.koplugin.zip",
       "plugin_module": "whispersync",
-      "published_at": "2026-09-05T13:24:53Z",
+      "published_at": "2026-09-05T13:31:05Z",
       "readme_url": "packages/whispersync.koplugin/README.md",
       "release_notes_url": "packages/whispersync.koplugin/RELEASE_NOTES.md",
       "versions_url": "packages/whispersync.koplugin/versions.json",
-      "size": "78443",
+      "size": "79430",
       "assets": [
         {
           "arch": "any",
           "asset": "whispersync.koplugin.zip",
-          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.2.1/whispersync.koplugin.zip",
-          "size": "78443"
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.2.2/whispersync.koplugin.zip",
+          "size": "79430"
         }
       ]
     }
