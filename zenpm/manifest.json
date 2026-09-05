@@ -21,17 +21,17 @@
       "source_type": "release",
       "source_asset": "whispersync.koplugin.zip",
       "plugin_module": "whispersync",
-      "published_at": "2026-09-05T00:04:59Z",
+      "published_at": "2026-09-05T00:09:09Z",
       "readme_url": "packages/whispersync.koplugin/README.md",
       "release_notes_url": "packages/whispersync.koplugin/RELEASE_NOTES.md",
       "versions_url": "packages/whispersync.koplugin/versions.json",
-      "size": "",
+      "size": "66620",
       "assets": [
         {
           "arch": "any",
           "asset": "whispersync.koplugin.zip",
           "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/v0.1.0/whispersync.koplugin.zip",
-          "size": ""
+          "size": "66620"
         }
       ]
     }
