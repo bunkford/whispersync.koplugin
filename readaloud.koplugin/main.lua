@@ -48,6 +48,7 @@ local DEFAULTS = {
     style = "invert",       -- invert | underline | box | lighten
     follow = true,          -- turn the page to the spoken word
     latency_adjust = 0,     -- seconds added to the backend's output latency
+    format = nil,           -- the Edge output format the service last honoured
 }
 local SPEEDS = { 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 }
 local LOG_LINES = 80
@@ -149,6 +150,7 @@ function ReadAloud:ensureParts()
         ffiutil = okf and ffiutil.runInSubProcess and ffiutil or nil,
         uimanager = UIManager,
         json_decode = edge.json_decode,
+        on_format = function(fmt) self.settings.format = fmt; self:saveSettings(); self:log("service format: " .. tostring(fmt)) end,
     }
     -- Make sure the cache dir exists for the temp files.
     pcall(require("util").makePath, DataStorage:getDataDir() .. "/cache")
@@ -220,33 +222,51 @@ end
 function ReadAloud:testVoice()
     NetworkMgr:runWhenOnline(function()
         local plan = self:plan()
-        local info = InfoMessage:new{ text = _("Asking the Edge voice service…") }
+        local info = InfoMessage:new{ text = _("Asking the Edge voice service, one format at a time…") }
         UIManager:show(info)
         UIManager:scheduleIn(0.1, function()
-            local result, err
+            local formats = {}
+            if self.settings.format then formats[1] = self.settings.format end
             for _i, f in ipairs(plan.formats or { edge.FORMATS.mp3 }) do
-                result, err = edge.synthesize("Hello. This is " .. (self.settings.voice:match("%-(%a+)Neural$") or "the reader") .. ", reading aloud on your Kindle.",
-                    { voice = self.settings.voice, speed = self.settings.speed, format = f, timeout = 30 })
-                if result then break end
-                if not (tostring(err):find("no audio") or tostring(err):find("refused")) then break end
+                if f ~= self.settings.format then formats[#formats + 1] = f end
+            end
+            local lines, result = {}, nil
+            local sample = "Hello. This is " .. ((self.settings.voice or ""):match("%-(%a+)Neural$") or "the reader") .. ", reading aloud on your Kindle."
+            for _i, f in ipairs(formats) do
+                local t0 = os.time()
+                local r, err = edge.synthesize(sample, { voice = self.settings.voice, speed = self.settings.speed, format = f, timeout = 30, first_timeout = 10 })
+                local took = os.time() - t0
+                if r then
+                    lines[#lines + 1] = T(_("%1: OK, %2 s of audio, %3 timed words (%4 s)"), f, ("%.1f"):format(r.duration), #r.words, took)
+                    self:log(("voice test %s: ok, %d bytes, %d words, %ds"):format(f, #r.audio, #r.words, took))
+                    if not result then result = r end
+                    if not edge.is_refusal(err) then break end
+                else
+                    lines[#lines + 1] = T(_("%1: %2 (%3 s)"), f, tostring(err), took)
+                    self:log(("voice test %s: %s (%ds)"):format(f, tostring(err), took))
+                    if not edge.is_refusal(err) then break end -- network trouble: no point trying other formats
+                end
             end
             UIManager:close(info)
             if not result then
-                self:log("voice test failed: " .. tostring(err))
-                notify(T(_("The voice service did not answer: %1"), tostring(err)), 8)
+                UIManager:show(InfoMessage:new{ text = _("The voice service did not answer.") .. "\n\n" .. table.concat(lines, "\n") })
                 return
             end
-            self:log(("voice test: %d bytes, %d words, %s"):format(#result.audio, #result.words, result.format))
+            if self.settings.format ~= result.format then
+                self.settings.format = result.format
+                self:saveSettings()
+            end
             local dir = DataStorage:getDataDir() .. "/cache"
             pcall(require("util").makePath, dir)
             local path = dir .. "/readaloud-test.audio"
             local f = io.open(path, "wb"); f:write(result.audio); f:close()
             local h, perr = audio.start(plan, path, result.format, 0, dir)
             if not h then
-                notify(T(_("Got %1 seconds of audio (%2 words) but could not play it: %3"), ("%.1f"):format(result.duration), #result.words, tostring(perr)), 8)
+                UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") .. "\n\n" .. T(_("Could not play the %1 audio: %2"), result.format, tostring(perr)) })
+                self:log("voice test playback failed: " .. tostring(perr))
                 return
             end
-            notify(T(_("Got %1 s of audio with %2 timed words (%3). Playing it now."), ("%.1f"):format(result.duration), #result.words, result.format), 6)
+            UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") .. "\n\n" .. T(_("Playing the %1 audio through %2 now."), result.format, tostring(h.player or plan.backend)), timeout = 8 })
             UIManager:scheduleIn(result.duration + 3, function() audio.stop(h); os.remove(path) end)
         end)
     end)
@@ -260,6 +280,7 @@ function ReadAloud:audioInfo()
         plan.gst and T(_("GStreamer: %1"), plan.gst) or nil,
         plan.ffmpeg and T(_("ffmpeg: %1"), plan.ffmpeg) or nil,
         T(_("Formats to try, in order: %1"), table.concat(plan.formats or {}, ", ")),
+        self.settings.format and T(_("Format the service last honoured: %1"), self.settings.format) or nil,
         T(_("Output latency: %1 s"), ("%.2f"):format(plan.latency or 0)),
         plan.reason and T(_("Note: %1"), plan.reason) or nil,
         "",
@@ -384,6 +405,11 @@ function ReadAloud:audioMenu()
                 { text = _("−0.25 s (marker earlier)"), keep_menu_open = true, callback = function() adjust(-0.25) end },
                 { text = _("Reset"), keep_menu_open = true, callback = function() self.settings.latency_adjust = 0; self:saveSettings(); self._plan = nil end },
             },
+        },
+        {
+            text = _("Forget which audio format worked"),
+            enabled_func = function() return self.settings.format ~= nil end,
+            callback = function() self.settings.format = nil; self:saveSettings(); if self.player then self.player.format_index = 1 end end,
         },
         { text = _("Log"), callback = function() self:showLog() end },
     }

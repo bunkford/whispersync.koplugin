@@ -38,7 +38,9 @@ local hl_calls = {}
 local highlight = { show = function(_, a, b) hl_calls[#hl_calls + 1] = { a, b }; return "shown" end, clear = function() hl_calls.cleared = true end }
 local states = {}
 local logs = {}
+local remembered = {}
 local p = Player.new{
+    on_format = function(f) remembered[#remembered + 1] = f end,
     ui = ui,
     settings = function() return { voice = "en-US-AndrewNeural", speed = 1, highlight = "word" } end,
     plan = { backend = "ffplay", formats = { edge.FORMATS.pcm, edge.FORMATS.mp3 }, latency = 0 },
@@ -63,6 +65,11 @@ H.eq(p.state, "playing", "playing after the first tick")
 H.eq(#started, 1, "audio started once"); H.eq(started[1].fmt, edge.FORMATS.mp3, "fell back to mp3 after pcm was refused")
 H.eq(synth_calls[1].format, edge.FORMATS.pcm, "asked for pcm first"); H.eq(synth_calls[2].format, edge.FORMATS.mp3, "then mp3")
 H.eq(p.format_index, 2, "remembers the format that worked")
+H.eq(remembered[1], edge.FORMATS.mp3, "and tells the plugin so it can persist it")
+-- A player created with the remembered format asks for it first
+local p_mem = Player.new{ ui = ui, settings = function() return { voice = "v", speed = 1, format = edge.FORMATS.mp3 } end,
+    plan = { backend = "ffplay", formats = { edge.FORMATS.pcm, edge.FORMATS.mp3 }, latency = 0 }, uimanager = stubs["ui/uimanager"] }
+H.eq(p_mem.format_index, 2, "remembered format goes first next session")
 H.eq(#hl_calls, 1, "first word marked at t=0"); H.eq(hl_calls[1][1], "1s", "it is w1")
 clock = 0.6
 p:tick()

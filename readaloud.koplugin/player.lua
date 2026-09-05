@@ -36,6 +36,11 @@ function Player.new(opts)
     self.cur = 0
     self.seq = 0
     self.format_index = 1
+    -- Start with the format a previous session found the service honours.
+    local remembered = opts.settings and opts.settings().format
+    for i, fmt in ipairs(opts.plan and opts.plan.formats or {}) do
+        if fmt == remembered then self.format_index = i end
+    end
     self.tick_fn = function() self:tick() end
     return self
 end
@@ -99,7 +104,7 @@ function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
         for _, f in ipairs(formats) do
             result, err = edge.synthesize(utt.text, { voice = settings.voice, speed = settings.speed, format = f, timeout = 40 })
             if result then break end
-            if not (tostring(err):find("no audio") or tostring(err):find("refused")) then break end
+            if not edge.is_refusal(err) then break end
         end
         local out = io.open(meta_path .. ".tmp", "wb")
         if result then
@@ -181,7 +186,10 @@ function Player:collect()
         utt.words = data.words or {}
         -- Remember the format the service honoured, so later fetches ask for it first.
         for i, fmt in ipairs(self.opts.plan and self.opts.plan.formats or {}) do
-            if fmt == data.format then self.format_index = i end
+            if fmt == data.format then
+                if self.format_index ~= i and self.opts.on_format then self.opts.on_format(data.format) end
+                self.format_index = i
+            end
         end
         self:log(("utterance %d ready: %.1fs, %d words, %s"):format(utt.id, utt.duration, #utt.words, tostring(data.format)))
     else

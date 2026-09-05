@@ -31,22 +31,24 @@ local function sh_quote(s) return "'" .. tostring(s):gsub("'", "'\\''") .. "'" e
 M.sh_quote = sh_quote
 
 --- Decide the playback plan. `env` = { kindle = bool, has = function(cmd) -> bool,
--- ffmpeg = path or nil }. Returns { backend, formats = {preferred..}, latency }.
--- `formats` are Edge output formats in the order to try: the first the
--- service honours is used.
+-- ffmpeg = path or nil }. Returns { backend, gst, lipc, ffmpeg, formats, latency }.
+-- `formats` are Edge output formats in the order to try; the first the
+-- service honours is used, and `start` picks the player per format:
+-- PCM/WAV go to GStreamer's mixersink, MP3 to ffmpeg-into-mixersink when an
+-- ffmpeg binary exists, else to Amazon's player (LIPC playermgr).
 function M.plan(env)
     local edge = require("edge")
     if env.kindle then
         local gst = (env.has("gst-launch-1.0") and "gst-launch-1.0") or (env.has("gst-launch-0.10") and "gst-launch-0.10") or nil
-        if gst then
-            local formats = { edge.FORMATS.pcm, edge.FORMATS.wav }
-            if env.ffmpeg then formats[#formats + 1] = edge.FORMATS.mp3 end
-            return { backend = "kindle-gst", gst = gst, ffmpeg = env.ffmpeg, formats = formats, latency = M.KINDLE_LATENCY }
+        local lipc = env.has("lipc-set-prop")
+        local formats = {}
+        if gst then formats[#formats + 1] = edge.FORMATS.pcm; formats[#formats + 1] = edge.FORMATS.wav end
+        if (gst and env.ffmpeg) or lipc then formats[#formats + 1] = edge.FORMATS.mp3 end
+        if #formats == 0 then
+            return { backend = "none", formats = { edge.FORMATS.mp3 }, latency = 0, reason = "no gst-launch or lipc-set-prop on this Kindle" }
         end
-        if env.has("lipc-set-prop") then
-            return { backend = "kindle-lipc", formats = { edge.FORMATS.mp3, edge.FORMATS.wav }, latency = M.KINDLE_LATENCY }
-        end
-        return { backend = "none", formats = { edge.FORMATS.mp3 }, latency = 0, reason = "no gst-launch or lipc-set-prop on this Kindle" }
+        return { backend = gst and "kindle-gst" or "kindle-lipc", gst = gst, lipc = lipc, ffmpeg = env.ffmpeg,
+                 formats = formats, latency = M.KINDLE_LATENCY }
     end
     for _, p in ipairs({ "ffplay", "mpv", "paplay", "aplay" }) do
         if env.has(p) then
@@ -55,6 +57,23 @@ function M.plan(env)
         end
     end
     return { backend = "none", formats = { edge.FORMATS.mp3 }, latency = 0, reason = "no audio player found (ffplay, mpv, paplay or aplay)" }
+end
+
+--- Which player handles `fmt` under this plan: "gst", "ffmpeg-gst", "lipc",
+-- a desktop player name, or nil with a reason.
+function M.player_for(plan, fmt)
+    local edge = require("edge")
+    if plan.backend == "kindle-gst" or plan.backend == "kindle-lipc" then
+        if fmt == edge.FORMATS.mp3 then
+            if plan.gst and plan.ffmpeg then return "ffmpeg-gst" end
+            if plan.lipc then return "lipc" end
+            return nil, "MP3 needs an ffmpeg binary or Amazon's player, neither is available"
+        end
+        if plan.gst then return "gst" end
+        return nil, "raw audio needs gst-launch, which this Kindle lacks"
+    end
+    if plan.backend == "none" then return nil, plan.reason end
+    return plan.backend
 end
 
 --- GStreamer caps for our PCM, per gst generation.
@@ -71,34 +90,37 @@ end
 function M.command(plan, file, fmt, seek)
     local edge = require("edge")
     seek = seek or 0
-    if plan.backend == "kindle-gst" then
-        if fmt == edge.FORMATS.mp3 then
-            -- ffmpeg decodes into the same pipeline; seek is ffmpeg's -ss.
-            return ("%s -loglevel error -nostdin -ss %.2f -i %s -f s16le -ar %d -ac 1 -af 'adelay=500:all=1,apad=pad_dur=1' - | %s fdsrc%s ! capsfilter caps=%s ! mixersink stream-type=Music sync=true")
-                :format(sh_quote(plan.ffmpeg), seek, sh_quote(file), M.PCM_RATE, plan.gst,
-                    plan.gst == "gst-launch-1.0" and " do-timestamp=true" or "",
-                    sh_quote(M.gst_caps(plan.gst, M.PCM_RATE, 1)))
-        end
+    local player, why = M.player_for(plan, fmt)
+    if not player then return nil, why end
+    if player == "ffmpeg-gst" then
+        -- ffmpeg decodes into the mixersink pipeline; seek is ffmpeg's -ss.
+        return ("%s -loglevel error -nostdin -ss %.2f -i %s -f s16le -ar %d -ac 1 -af 'adelay=500:all=1,apad=pad_dur=1' - | %s fdsrc%s ! capsfilter caps=%s ! mixersink stream-type=Music sync=true")
+            :format(sh_quote(plan.ffmpeg), seek, sh_quote(file), M.PCM_RATE, plan.gst,
+                plan.gst == "gst-launch-1.0" and " do-timestamp=true" or "",
+                sh_quote(M.gst_caps(plan.gst, M.PCM_RATE, 1)))
+    elseif player == "gst" then
         return ("%s filesrc location=%s ! capsfilter caps=%s ! mixersink stream-type=Music sync=true")
             :format(plan.gst, sh_quote(file), sh_quote(M.gst_caps(plan.gst, M.PCM_RATE, 1)))
-    elseif plan.backend == "ffplay" then
+    elseif player == "lipc" then
+        return nil, "lipc is driven with lipc-set-prop, not a command line"
+    elseif player == "ffplay" then
         return ("ffplay -nodisp -autoexit -loglevel error -ss %.2f %s%s"):format(seek,
             fmt == edge.FORMATS.pcm and ("-f s16le -ar %d -ac 1 "):format(M.PCM_RATE) or "", sh_quote(file))
-    elseif plan.backend == "mpv" then
+    elseif player == "mpv" then
         return ("mpv --no-video --really-quiet --start=%.2f %s%s"):format(seek,
             fmt == edge.FORMATS.pcm and ("--demuxer=rawaudio --demuxer-rawaudio-rate=%d --demuxer-rawaudio-channels=1 "):format(M.PCM_RATE) or "", sh_quote(file))
-    elseif plan.backend == "paplay" then
+    elseif player == "paplay" then
         if fmt == edge.FORMATS.pcm then
             return ("paplay --raw --format=s16le --rate=%d --channels=1 %s"):format(M.PCM_RATE, sh_quote(file))
         end
         return "paplay " .. sh_quote(file)
-    elseif plan.backend == "aplay" then
+    elseif player == "aplay" then
         if fmt == edge.FORMATS.pcm then
             return ("aplay -q -t raw -f S16_LE -r %d -c 1 %s"):format(M.PCM_RATE, sh_quote(file))
         end
         return "aplay -q " .. sh_quote(file)
     end
-    return nil, plan.reason or "no backend"
+    return nil, "no player for " .. tostring(fmt)
 end
 
 --- Shell command that writes the padded raw PCM the Kindle pipeline wants:
@@ -159,8 +181,9 @@ end
 function M.start(plan, file, fmt, seek, tmpdir)
     local edge = require("edge")
     seek = seek or 0
-    if plan.backend == "none" then return nil, plan.reason end
-    if plan.backend == "kindle-lipc" then
+    local player, why = M.player_for(plan, fmt)
+    if not player then return nil, why end
+    if player == "lipc" then
         kindle_focus()
         os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
         os.execute("lipc-set-prop com.lab126.playermgr Open " .. sh_quote(file) .. " 2>/dev/null")
@@ -168,18 +191,20 @@ function M.start(plan, file, fmt, seek, tmpdir)
         local p = io.popen("lipc-get-prop com.lab126.playermgr InPlayback 2>/dev/null")
         local out = p and p:read("*a") or ""
         if p then p:close() end
-        if not out:match("^%s*1") then return nil, "playermgr did not start playback" end
+        if not out:match("^%s*1") then
+            os.execute("lipc-set-prop com.lab126.playermgr Stop '' 2>/dev/null")
+            return nil, "Amazon's player (playermgr) did not start playing the MP3"
+        end
         return { lipc = true, started = M.now(), plan = plan, file = file, seek = 0, latency = plan.latency }
     end
     local play_file = file
-    local latency = plan.latency
-    if plan.backend == "kindle-gst" and fmt ~= edge.FORMATS.mp3 then
+    if player == "gst" then
         kindle_focus()
         -- Old pipelines still draining would play over the new one.
         os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
         play_file = (tmpdir or "/tmp") .. "/readaloud-play.pcm"
         os.execute(M.prepare_pcm_command(file, play_file, seek, fmt == edge.FORMATS.wav))
-    elseif plan.backend == "kindle-gst" then
+    elseif player == "ffmpeg-gst" then
         kindle_focus()
         os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
     end
@@ -190,7 +215,8 @@ function M.start(plan, file, fmt, seek, tmpdir)
     local pid = tonumber((p:read("*a") or ""):match("%d+"))
     p:close()
     if not pid then return nil, "player did not start" end
-    return { pid = pid, started = M.now(), plan = plan, file = file, seek = seek, latency = latency, temp = play_file ~= file and play_file or nil }
+    return { pid = pid, started = M.now(), plan = plan, file = file, seek = seek, latency = plan.latency,
+             temp = play_file ~= file and play_file or nil, player = player }
 end
 
 --- Monotonic-ish clock in seconds (socket.gettime when there is one).
@@ -231,7 +257,7 @@ function M.stop(handle)
         -- The sh wrapper and whatever it spawned (ffmpeg | gst-launch).
         os.execute("pkill -P " .. handle.pid .. " 2>/dev/null; kill " .. handle.pid .. " 2>/dev/null")
     end
-    if handle.plan and handle.plan.backend == "kindle-gst" then
+    if handle.player == "gst" or handle.player == "ffmpeg-gst" then
         os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
     end
     if handle.temp then os.remove(handle.temp) end

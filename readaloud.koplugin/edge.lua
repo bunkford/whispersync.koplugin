@@ -297,9 +297,22 @@ end
 
 M.clock_skew = 0   -- seconds to add to the local clock; learned from a 403
 
---- Speak `text`. opts: voice, speed (1.0), format (M.FORMATS.*), timeout,
--- json_decode (function), connect (ws.connect replacement for tests).
--- Returns { audio = string, words = {{text,t0,t1}}, format, duration }
+M.FIRST_TIMEOUT = 12   -- seconds to wait for the service's first message
+
+--- Is this error the service declining the request (as opposed to the
+-- network failing)? A format the service does not support gets either
+-- silence until our timeout or a turn that ends without audio.
+function M.is_refusal(err)
+    err = tostring(err or "")
+    return err:find("no audio", 1, true) ~= nil or err:find("refused", 1, true) ~= nil
+        or err:find("did not answer", 1, true) ~= nil
+end
+
+--- Speak `text`. opts: voice, speed (1.0), format (M.FORMATS.*), timeout
+-- (per read, default 30), first_timeout (wait for the first message,
+-- default M.FIRST_TIMEOUT), json_decode (function), connect (ws.connect
+-- replacement for tests).
+-- Returns { audio = string, words = {{text,t0,t1}}, format, duration, took }
 -- or nil, reason.
 function M.synthesize(text, opts)
     opts = opts or {}
@@ -310,6 +323,7 @@ function M.synthesize(text, opts)
     local voice = opts.voice or M.DEFAULT_VOICE
     text = M.sanitize(text or "")
     if text:match("^%s*$") then return nil, "nothing to say" end
+    local t_start = os.time()
 
     local attempts = 0
     while true do
@@ -321,12 +335,21 @@ function M.synthesize(text, opts)
             local ok, serr = conn:send_text(M.speech_config(now, format))
             if ok then ok, serr = conn:send_text(M.ssml_message(M.connect_id(), now, M.ssml(voice, text, opts.speed, opts.pitch))) end
             if not ok then conn:close(); return nil, "send: " .. tostring(serr) end
+            local first = true
             while true do
-                local opcode, payload = conn:recv()
+                local opcode, payload = conn:recv(first and (opts.first_timeout or M.FIRST_TIMEOUT) or nil)
                 if not opcode then
-                    if payload ~= "closed" then conn:close(); return nil, "receive: " .. tostring(payload) end
-                    break
+                    if payload == "closed" then break end
+                    conn:close()
+                    if payload == "timeout" then
+                        if first then
+                            return nil, ("the service did not answer within %d s (format %s refused?)"):format(opts.first_timeout or M.FIRST_TIMEOUT, format)
+                        end
+                        return nil, "the service stopped mid-stream (timeout)"
+                    end
+                    return nil, "receive: " .. tostring(payload)
                 end
+                first = false
                 if opcode == ws.OPCODE.TEXT then
                     local headers, body = M.parse_text_frame(payload)
                     local path = headers.Path
@@ -346,10 +369,11 @@ function M.synthesize(text, opts)
             conn:close()
             local bytes = table.concat(audio)
             if #bytes == 0 then
-                return nil, closed_ok and "the service sent no audio (format " .. format .. " refused?)" or "connection ended without audio"
+                return nil, closed_ok and ("the service sent no audio (format " .. format .. " refused?)") or "connection ended without audio"
             end
             table.sort(words, function(a, b) return a.t0 < b.t0 end)
-            return { audio = bytes, words = words, format = format, duration = M.duration(format, #bytes), voice = voice }
+            return { audio = bytes, words = words, format = format, duration = M.duration(format, #bytes), voice = voice,
+                     took = os.time() - t_start }
         end
         -- A 403 with a Date header means our clock is off: learn the skew, retry once.
         local date = resp and resp.headers and resp.headers.date

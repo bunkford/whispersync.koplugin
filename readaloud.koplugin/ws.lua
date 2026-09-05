@@ -177,7 +177,8 @@ local Conn = {}
 Conn.__index = Conn
 
 --- Open a WebSocket. `opts.headers` is an ordered list of {name, value};
--- `opts.timeout` seconds per socket operation (default 30).
+-- `opts.timeout` seconds per socket operation (default 30); `opts.host`
+-- overrides the Host header (testing through a tunnel).
 -- Returns conn, or nil, reason, response (the upgrade response, when the
 -- server answered with something other than 101; it carries a Date header
 -- the Edge client uses to correct clock skew).
@@ -208,7 +209,7 @@ function M.connect(url, opts)
         sock = ssock
     end
     local key = M.base64(M.random_bytes(16))
-    local req = M.handshake_request(u.host, u.path, key, opts.headers)
+    local req = M.handshake_request(opts.host or u.host, u.path, key, opts.headers)
     local sent, serr = sock:send(req)
     if not sent then sock:close(); return nil, "send: " .. tostring(serr) end
     -- Read the response head.
@@ -224,7 +225,7 @@ function M.connect(url, opts)
         sock:close()
         return nil, "upgrade refused: " .. tostring(resp and resp.status or "?"), resp
     end
-    return setmetatable({ sock = sock, buf = "", closed = false }, Conn)
+    return setmetatable({ sock = sock, closed = false, timeout = opts.timeout or 30 }, Conn)
 end
 
 function Conn:send_text(s)
@@ -235,45 +236,88 @@ function Conn:send_pong(payload)
     return self.sock:send(M.encode_frame(M.OPCODE.PONG, payload or ""))
 end
 
+--- Read exactly n bytes (luasec hands back partial reads on timeout).
+function Conn:read_exact(n, timeout)
+    if n == 0 then return "" end
+    self.sock:settimeout(timeout or self.timeout or 30)
+    local chunks, got = {}, 0
+    while got < n do
+        local chunk, err, partial = self.sock:receive(n - got)
+        if chunk then
+            chunks[#chunks + 1] = chunk
+            got = got + #chunk
+        else
+            if partial and #partial > 0 then
+                chunks[#chunks + 1] = partial
+                got = got + #partial
+            end
+            if err == "closed" then return nil, "closed" end
+            -- luasec reports a timed-out read as "wantread".
+            if err == "timeout" or err == "wantread" then return nil, "timeout" end
+            if got < n then return nil, err or "receive failed" end
+        end
+    end
+    return table.concat(chunks)
+end
+
+--- Read one frame: { fin, opcode, payload }. `timeout` applies to the wait
+-- for its first byte; the rest of a started frame gets the normal timeout.
+function Conn:read_frame(timeout)
+    local head, err = self:read_exact(2, timeout)
+    if not head then return nil, err end
+    local b1, b2 = head:byte(1, 2)
+    local fin = band(b1, 0x80) ~= 0
+    local opcode = band(b1, 0x0f)
+    local masked = band(b2, 0x80) ~= 0
+    local len = band(b2, 0x7f)
+    if len == 126 then
+        local ext = self:read_exact(2); if not ext then return nil, "closed" end
+        len = ext:byte(1) * 256 + ext:byte(2)
+    elseif len == 127 then
+        local ext = self:read_exact(8); if not ext then return nil, "closed" end
+        len = 0
+        for i = 1, 8 do len = len * 256 + ext:byte(i) end
+    end
+    local mask
+    if masked then
+        mask = self:read_exact(4); if not mask then return nil, "closed" end
+    end
+    local payload, perr = self:read_exact(len)
+    if not payload then return nil, perr end
+    if mask then
+        local m = { mask:byte(1, 4) }
+        local out = {}
+        for i = 1, len do out[i] = string.char(bxor(payload:byte(i), m[(i - 1) % 4 + 1])) end
+        payload = table.concat(out)
+    end
+    return { fin = fin, opcode = opcode, payload = payload }
+end
+
 --- Receive one complete message. Returns opcode (TEXT or BINARY), payload;
--- or nil, "closed"/error. Pings are answered here; fragments are joined.
-function Conn:recv()
+-- or nil, "closed" / "timeout" / error. Pings are answered here; fragments
+-- are joined. `timeout` is how long to wait for the message to begin.
+function Conn:recv(timeout)
     local message, mopcode
     while true do
-        local frames, rest = M.decode_frames(self.buf)
-        self.buf = rest
-        for _, f in ipairs(frames) do
-            if f.opcode == M.OPCODE.PING then
-                pcall(self.send_pong, self, f.payload)
-            elseif f.opcode == M.OPCODE.PONG then
-                -- ignore
-            elseif f.opcode == M.OPCODE.CLOSE then
-                self.closed = true
-                pcall(function() self.sock:send(M.encode_frame(M.OPCODE.CLOSE, "")) end)
-                return nil, "closed"
-            else
-                if f.opcode ~= M.OPCODE.CONTINUATION then
-                    mopcode = f.opcode
-                    message = {}
-                end
-                if not message then return nil, "protocol: continuation without start" end
-                message[#message + 1] = f.payload
-                if f.fin then
-                    return mopcode, table.concat(message)
-                end
+        local f, err = self:read_frame(timeout)
+        if not f then return nil, err end
+        if f.opcode == M.OPCODE.PING then
+            pcall(self.send_pong, self, f.payload)
+        elseif f.opcode == M.OPCODE.PONG then
+            -- ignore
+        elseif f.opcode == M.OPCODE.CLOSE then
+            self.closed = true
+            pcall(function() self.sock:send(M.encode_frame(M.OPCODE.CLOSE, "")) end)
+            return nil, "closed"
+        else
+            if f.opcode ~= M.OPCODE.CONTINUATION then
+                mopcode = f.opcode
+                message = {}
             end
+            if not message then return nil, "protocol: continuation without start" end
+            message[#message + 1] = f.payload
+            if f.fin then return mopcode, table.concat(message) end
         end
-        -- Need more bytes.
-        local chunk, err, partial = self.sock:receive(1)
-        if not chunk then
-            if partial and #partial > 0 then chunk = partial
-            else return nil, err or "receive failed" end
-        end
-        -- Take whatever else is immediately available, cheaply.
-        self.sock:settimeout(0)
-        local more, _, mpartial = self.sock:receive(65536)
-        self.sock:settimeout(self.timeout or 30)
-        self.buf = self.buf .. chunk .. (more or mpartial or "")
     end
 end
 
