@@ -39,7 +39,7 @@
     {
       "id": "readaloud",
       "name": "Read Aloud (Edge voices)",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "description": "Reads the open book aloud with Microsoft Edge's neural voices, synthesized on the device, and underlines each word as it is spoken. Bluetooth audio on Kindle.",
       "author": "bunkford",
       "category": "media",
@@ -52,17 +52,17 @@
       "source_type": "release",
       "source_asset": "readaloud.koplugin.zip",
       "plugin_module": "readaloud",
-      "published_at": "2026-09-05T20:48:14Z",
+      "published_at": "2026-09-05T20:51:48Z",
       "readme_url": "packages/readaloud.koplugin/README.md",
       "release_notes_url": "packages/readaloud.koplugin/RELEASE_NOTES.md",
       "versions_url": "packages/readaloud.koplugin/versions.json",
-      "size": "38893",
+      "size": "39590",
       "assets": [
         {
           "arch": "any",
           "asset": "readaloud.koplugin.zip",
-          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/readaloud-v0.1.3/readaloud.koplugin.zip",
-          "size": "38893"
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/readaloud-v0.1.4/readaloud.koplugin.zip",
+          "size": "39590"
         }
       ]
     }
