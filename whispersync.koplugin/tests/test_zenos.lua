@@ -53,34 +53,138 @@ local ok3, msg3 = Zen.addKindleTab("/x", "Kindle", full)
 H.ok(ok3 and msg3:find("hidden"), "eighth tab added hidden: " .. tostring(msg3))
 H.eq(select(2, Zen.addKindleTab("/x", "Kindle", nil)), "ZenOS is not running", "no plugin: clear reason")
 
--- 2. Cover badge hook degrades gracefully without the renderer.
+-- 2. Cover banner hook degrades gracefully without the renderer.
 local okb, why = Zen.installCoverBadge(function() return true end, function() return true end)
 H.eq(okb, false, "no mosaic renderer loaded -> false"); H.ok(why, "with a reason")
--- With a ZenOS-patched mosaic menu present, items get wrapped once and painted with a badge.
+local okh, whyh = Zen.installHomeBadge(function() return true end, function() return true end)
+H.eq(okh, false, "no ZenOS Home cover module -> false"); H.ok(whyh, "with a reason")
+
+-- A tiny pixel-buffer stand-in for Blitbuffer: enough to see where the banner lands.
+local function fake_bb(w, h, fill)
+    local px = {}
+    local bb = { w = w, h = h, px = px, rects = {} }
+    function bb:getWidth() return self.w end
+    function bb:getHeight() return self.h end
+    function bb:getType() return 4 end
+    function bb:setPixel(x, y, c) self.px[y * 100000 + x] = c end
+    function bb:getPixel(x, y) return self.px[y * 100000 + x] or fill end
+    function bb:paintRect(x, y, rw, rh, c)
+        self.rects[#self.rects + 1] = { x = x, y = y, w = rw, h = rh, c = c }
+        for yy = y, y + rh - 1 do for xx = x, x + rw - 1 do self.px[yy * 100000 + xx] = c end end
+    end
+    return bb
+end
+package.preload["ffi/blitbuffer"] = function() return {
+    COLOR_WHITE = "W", COLOR_BLACK = "B",
+    new = function(w, h) return fake_bb(w, h, nil) end,
+} end
+local glyphs = 0
+package.preload["ui/widget/textwidget"] = function() return { new = function(_, o)
+    return { getSize = function() return { w = 6, h = 8 } end, paintTo = function() glyphs = glyphs + 1 end } end } end
+package.preload["ui/font"] = function() return { getFace = function() return "face" end } end
+package.preload["device"] = function() return { screen = { scaleBySize = function(_, n) return n end } } end
+
+-- Geometry follows ZenOS's "New" banner proportions.
+local g = Zen.bannerGeometry(100, 150, 1)
+H.eq(g.span, 50, "span = 2.5 x base (base = max(20, 14% of width))")
+H.eq(g.thick, 17, "band thickness 35% of span")
+H.eq(g.font_size, 6, "font clamps at 6")
+H.eq(Zen.bannerGeometry(300, 450, 1).span, 105, "bigger cover, bigger banner")
+H.eq(Zen.bannerGeometry(30, 40, 1).span, 37, "tiny cover: banner bounded by the cover")
+
+-- Painting: top-left banner covers the top-left corner only; top-right the other.
+local function corner_hits(bb, x, y, w, h)
+    local tl, tr, bl = 0, 0, 0
+    for yy = y, y + h - 1 do
+        for xx = x, x + w - 1 do
+            local c = bb.px[yy * 100000 + xx]
+            if c == "B" or c == "W" then
+                -- the outer 25% square of each top corner, and the whole lower half
+                if xx < x + w / 4 and yy < y + h / 4 then tl = tl + 1 end
+                if xx >= x + w * 3 / 4 and yy < y + h / 4 then tr = tr + 1 end
+                if yy >= y + h / 2 then bl = bl + 1 end
+            end
+        end
+    end
+    return tl, tr, bl
+end
+local screen = fake_bb(400, 600, "bg")
+H.eq(Zen.paintBanner(screen, 10, 20, 100, 150, { corner = "tl", color = "B", foreground = "W", scale = 1 }), true, "painted")
+local tl, tr, bottom = corner_hits(screen, 10, 20, 100, 150)
+H.ok(tl > 30, "top-left corner painted (" .. tl .. " px)")
+H.eq(tr, 0, "nothing in the top-right corner"); H.eq(bottom, 0, "nothing in the lower half")
+H.ok(glyphs >= 1, "label drawn into the band once")
+local before = glyphs
+screen = fake_bb(400, 600, "bg")
+Zen.paintBanner(screen, 10, 20, 100, 150, { corner = "tr", color = "B", foreground = "W", scale = 1 })
+tl, tr = corner_hits(screen, 10, 20, 100, 150)
+H.eq(tl, 0, "top-right style leaves the top-left corner alone"); H.ok(tr > 30, "top-right corner painted")
+H.eq(glyphs, before, "band cached: no second text render for the same size")
+H.eq(Zen.paintBanner(screen, 0, 0, 8, 8, {}), false, "too small to carry a banner")
+screen = fake_bb(400, 600, "bg")
+Zen.paintBanner(screen, 10, 20, 100, 150, { corner = "tl", color = "B", foreground = "W", scale = 1, border = 2, border_color = "E" })
+H.eq(screen.px[20 * 100000 + 10], "E", "cover border repainted over the banner (top edge)")
+H.eq(screen.px[100 * 100000 + 10], "E", "left edge too")
+
+-- With a ZenOS-patched mosaic menu present, items get wrapped once and painted with the banner.
 local painted = {}
 local Mosaic = { _zen_renderer_patched = true }
 Mosaic._updateItemsBuildUI = function(self) return 1 end
 package.loaded["mosaicmenu"] = Mosaic
-package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "W", COLOR_BLACK = "B" } end
-package.preload["ui/widget/textwidget"] = function() return { new = function(_, o) return { getSize = function() return { w = 6, h = 8 } end, paintTo = function() painted.glyph = true end } end } end
-package.preload["ui/font"] = function() return { getFace = function() return "face" end } end
-package.preload["device"] = function() return { screen = { scaleBySize = function(_, n) return n end } } end
-H.eq(Zen.installCoverBadge(function(p) return p == "/k.mobi" end, function() return true end), true, "hook installed")
+local corner = "tl"
+H.eq(Zen.installCoverBadge(function(p) return p == "/k.mobi" end, function() return true end, function() return { corner = corner } end), true, "hook installed")
 H.eq(Zen.installCoverBadge(function() end, function() end), true, "second install is a no-op")
-local bb = { paintRoundedRect = function() painted.rects = (painted.rects or 0) + 1 end }
-local item_k = { _zen_is_book = true, filepath = "/k.mobi", _zen_cover_frame = { dimen = { x = 10, y = 20, w = 100, h = 150 } },
+-- (the second install replaced the callbacks with ones that return nil: restore)
+Zen.installCoverBadge(function(p) return p == "/k.mobi" end, function() return true end, function() return { corner = corner } end)
+local tile_bb = fake_bb(400, 600, "bg")
+local item_k = { _zen_is_book = true, filepath = "/k.mobi", _zen_cover_frame = { dimen = { x = 10, y = 20, w = 100, h = 150 }, bordersize = 1, color = "E" },
     paintTo = function() painted.original = (painted.original or 0) + 1 end }
-local item_other = { _zen_is_book = true, filepath = "/o.epub", _zen_cover_frame = { dimen = { x = 0, y = 0, w = 100, h = 150 } },
+local item_other = { _zen_is_book = true, filepath = "/o.epub", _zen_cover_frame = { dimen = { x = 200, y = 20, w = 100, h = 150 } },
     paintTo = function() painted.original = (painted.original or 0) + 1 end }
 local menu = { layout = { { item_k, item_other } } }
 Mosaic._updateItemsBuildUI(menu)
-item_k:paintTo(bb, 0, 0); item_other:paintTo(bb, 0, 0)
+item_k:paintTo(tile_bb, 0, 0); item_other:paintTo(tile_bb, 0, 0)
 H.eq(painted.original, 2, "original paintTo still runs for both")
-H.eq(painted.rects, 2, "badge (two rounded rects) painted for the Kindle book only")
-H.eq(painted.glyph, true, "glyph painted")
+tl = corner_hits(tile_bb, 10, 20, 100, 150)
+H.ok(tl > 30, "banner on the Kindle tile")
+H.eq(corner_hits(tile_bb, 200, 20, 100, 150), 0, "no banner on the other book")
+H.eq(tile_bb.px[20 * 100000 + 10], "E", "tile border repainted")
 Mosaic._updateItemsBuildUI(menu)
-item_k:paintTo(bb, 0, 0)
-H.eq(painted.rects, 4, "rebuild does not double-wrap (one badge per paint)")
+local wraps = 0
+local probe = { _zen_is_book = true, filepath = "/k.mobi", _zen_cover_frame = { dimen = { x = 0, y = 0, w = 100, h = 150 } }, paintTo = function() wraps = wraps + 1 end }
+Mosaic._updateItemsBuildUI({ layout = { { probe } } }); Mosaic._updateItemsBuildUI({ layout = { { probe } } })
+probe:paintTo(fake_bb(400, 600, "bg"), 0, 0)
+H.eq(wraps, 1, "rebuild does not double-wrap")
+
+-- ZenOS Home covers: the cover factory is wrapped so Featured/Recent covers carry the banner.
+local built = 0
+local cover_common = { make_cover_widget = function(book, mw, mh, o)
+    built = built + 1
+    local frame = { bordersize = 1, color = "E", paintTo = function(self, bb, x, y) self.dimen = { x = x, y = y, w = 100, h = 150 }; painted.home = (painted.home or 0) + 1 end }
+    return frame, 100, 150, false
+end }
+package.loaded[Zen.HOME_COVER_MODULE] = cover_common
+H.eq(Zen.installHomeBadge(function(p) return p == "/k.mobi" end, function() return true end, function() return { corner = corner } end), true, "home hook installed")
+H.eq(Zen.installHomeBadge(function(p) return p == "/k.mobi" end, function() return true end, function() return { corner = corner } end), true, "home hook idempotent")
+local home_bb = fake_bb(400, 600, "bg")
+local f1, w1, h1, hyd = cover_common.make_cover_widget({ path = "/k.mobi" }, 100, 150, {})
+H.eq(built, 1, "original factory called once"); H.eq(w1, 100, "return values pass through"); H.eq(hyd, false, "all four of them")
+f1:paintTo(home_bb, 10, 20)
+H.eq(painted.home, 1, "original cover painted")
+H.ok(corner_hits(home_bb, 10, 20, 100, 150) > 30, "banner on the Kindle Home cover")
+local f2 = cover_common.make_cover_widget({ path = "/other.epub" }, 100, 150, {})
+f2:paintTo(home_bb, 200, 20)
+H.eq(corner_hits(home_bb, 200, 20, 100, 150), 0, "other books untouched")
+local f3 = cover_common.make_cover_widget(nil, 100, 150, {})
+f3:paintTo(home_bb, 200, 300)
+H.eq(painted.home, 3, "cover without a book still paints")
+corner = "tr"
+home_bb = fake_bb(400, 600, "bg")
+f1:paintTo(home_bb, 10, 20)
+local tl2, tr2 = corner_hits(home_bb, 10, 20, 100, 150)
+H.eq(tl2, 0, "corner setting read at paint time"); H.ok(tr2 > 30, "now top-right")
+local st = Zen.bannerStatus()
+H.eq(st.library, true, "status: library hook on"); H.eq(st.home, true, "status: home hook on"); H.eq(st.zen, false, "status: no live ZenOS")
 
 -- 3. History decisions and sidecar progress.
 H.eq(Zen.historyNeedsUpdate({}, "/k.mobi", 1000), true, "unknown file -> add")

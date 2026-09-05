@@ -206,12 +206,15 @@ part of the device rather than a plugin:
   finished state into the book's sidecar. ZenOS's Home → Recent strip, progress
   badges and finished-book dimming read exactly those. A more recent read on
   this device is never overwritten.
-- **A "K" badge** on the cover of every Kindle book: on the plugin's shelf, on
-  its Home strip, and on ZenOS's own library tiles (bottom-left, lifted above
-  the page-count pill when that is on). *Library → Kindle badge on covers*
-  turns it off.
-- **Home strip.** Home → widgets → *Kindle library* adds a strip of your most
-  recently read Kindle books; tap one to open it.
+- **A "Kindle" corner banner** on the cover of every Kindle book, drawn like
+  ZenOS's own "New" banner: on the plugin's shelf and Home strip, on ZenOS
+  Home (the Featured book, Recent and every other strip) and on ZenOS's
+  library tiles. It sits in the top-left corner so ZenOS's progress badge and
+  "New" banner keep the top-right; *Library → "Kindle" banner on covers* turns
+  it off or moves it. *ZenOS → Banner on ZenOS covers…* shows which ZenOS
+  screens it has reached.
+- **Home strip.** ZenOS Settings → Library → Home → Widgets → *Kindle library*
+  adds a strip of your most recently read Kindle books; tap one to open it.
 - **Launcher / Controls → Add → Plugin menu → Kindle Whispersync** opens the
   cloud shelf (everything in the account, downloaded or not).
 
@@ -219,7 +222,7 @@ Zen Mode hides KOReader's Tools menu, where this plugin's settings live; reach
 them through *Launcher → Add → KOReader submenu → Tools → Kindle Whispersync*,
 or leave Zen Mode briefly.
 
-The tab and the badge reach into ZenOS the same way ZenOS reaches into
+The tab and the banner reach into ZenOS the same way ZenOS reaches into
 KOReader, and every step is guarded: if a ZenOS update moves something, that
 feature quietly switches off rather than breaking anything.
 
@@ -323,7 +326,7 @@ main.lua           KOReader glue: menus, hooks, connect page, shelf actions, syn
 catalog.lua        what the shelf knows about each book: titles, progress, sorting, details
 shelf.lua          the cover grid widget, and the ZenOS Home strip
 connectdialog.lua  QR code + address + steps + live status, one screen
-zenos.lua          ZenOS navbar tab, cover badge hook, history/progress hand-off
+zenos.lua          ZenOS navbar tab, cover banner hooks, history/progress hand-off
 amazon.lua         device-stack client: library, sidecar GET/POST, downloads, covers, OAuth registration
 adp.lua            ADP request signing (libcrypto via FFI, `openssl` CLI fallback)
 mobi.lua           MOBI/EXTH headers, PalmDOC decompression, plain-text index, cover location

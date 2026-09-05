@@ -88,7 +88,8 @@ local DEFAULT_SETTINGS = {
     library_dir = nil,         -- default computed below
     keep_on_device = true,     -- download every personal document, so the native library shows them all
     download_cap_mb = 40,      -- but skip anything larger than this when doing so automatically
-    kindle_badge = true,       -- "K" badge on Kindle books' covers (shelf, Home strip, ZenOS tiles)
+    kindle_badge = true,       -- "Kindle" corner banner on Kindle books' covers (shelf, ZenOS Home and library)
+    badge_corner = "tl",       -- which top corner the banner sits in: "tl" or "tr"
     feed_history = true,       -- Amazon read times/progress into KOReader history and sidecars
 }
 
@@ -210,6 +211,7 @@ end
 -- "did it sync?" has an answer.
 function Whispersync:log(msg)
     logger.info("whispersync:", msg)
+    self.synclog = self.synclog or {}
     self.synclog[#self.synclog + 1] = os.date("%m-%d %H:%M:%S") .. "  " .. msg
     while #self.synclog > LOG_LINES do table.remove(self.synclog, 1) end
     self.store:saveSetting("synclog", self.synclog)
@@ -259,13 +261,28 @@ end
 -- ZenOS
 -------------------------------------------------------------------------------
 
+--- Banner options shared by the shelf, the Home strip and the ZenOS hooks.
+function Whispersync:badgeStyle()
+    return { corner = self.settings.badge_corner == "tr" and "tr" or "tl" }
+end
+
 --- Offer a "Kindle library" strip for the ZenOS Home page. Safe to call any
 -- number of times; ZenOS replaces the builder for an existing id.
 function Whispersync:registerZenOS()
-    -- Cover badge on ZenOS's own library tiles (no-op until ZenOS's renderer exists).
-    pcall(Zen.installCoverBadge,
-        function(path) local inst = Whispersync.liveInstance() or self; return inst:isKindleFile(path) end,
-        function() local inst = Whispersync.liveInstance() or self; return inst.settings.kindle_badge end)
+    -- "Kindle" banner on ZenOS's library tiles and Home covers (no-ops until
+    -- the ZenOS modules they hook exist; harmless to repeat).
+    local function is_kindle(path) local inst = Whispersync.liveInstance() or self; return inst:isKindleFile(path) end
+    local function enabled() local inst = Whispersync.liveInstance() or self; return inst.settings.kindle_badge end
+    local function style() local inst = Whispersync.liveInstance() or self; return inst:badgeStyle() end
+    for name, install in pairs({ ["ZenOS library banner"] = Zen.installCoverBadge, ["ZenOS Home banner"] = Zen.installHomeBadge }) do
+        local ok, hooked, why = pcall(install, is_kindle, enabled, style)
+        local note = ok and (hooked and "on" or ("off: " .. tostring(why))) or ("error: " .. tostring(hooked))
+        self._zen_hook_notes = self._zen_hook_notes or {}
+        if self._zen_hook_notes[name] ~= note then
+            self._zen_hook_notes[name] = note
+            self:log(name .. " " .. note)
+        end
+    end
     local register = rawget(_G, "__ZENOS_REGISTER_HOME_ITEM") or rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")
     if type(register) ~= "function" then return false end
     local ok = pcall(register, "whispersync.shelf", function(ctx)
@@ -273,6 +290,41 @@ function Whispersync:registerZenOS()
         return inst:buildZenStrip(ctx)
     end, { label = _("Kindle library"), size = "m" })
     return ok
+end
+
+--- Repaint every cover that carries the banner after a setting changed.
+function Whispersync:refreshCovers()
+    if self.shelf then pcall(self.shelf.refresh, self.shelf) end
+    UIManager:setDirty("all", "ui")
+end
+
+function Whispersync:showHomeStripInfo()
+    local registered = type(rawget(_G, "__ZENOS_REGISTER_HOME_ITEM") or rawget(_G, "__ZEN_UI_REGISTER_HOME_ITEM")) == "function"
+    local lines = {
+        _("The “Kindle library” strip shows your most recently read Kindle books on ZenOS's Home page, with covers, progress and the Kindle banner. Tap a book to open it (downloading first if needed); tap an empty strip to open the library."),
+        "",
+        registered and _("Status: registered with ZenOS.") or _("Status: ZenOS's Home widget registry was not found, so the strip cannot be offered."),
+        "",
+        _("ZenOS decides whether the strip is shown. To turn it on: ZenOS Settings → Library → Home → Widgets, and enable “Kindle library”."),
+    }
+    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+end
+
+function Whispersync:showBannerInfo()
+    self:registerZenOS()
+    local st = Zen.bannerStatus()
+    local yes, no = _("yes"), _("no")
+    local lines = {
+        self.settings.kindle_badge and _("The “Kindle” banner is on.") or _("The “Kindle” banner is off (Library → “Kindle” banner on covers)."),
+        "",
+        T(_("ZenOS running: %1"), st.zen and yes or no),
+        T(_("ZenOS library tiles (Library, Kindle tab, folders): %1"), st.library and yes or no),
+        T(_("ZenOS Home covers (Featured, Recent and other strips): %1"), st.home and yes or no),
+        _("This plugin's own shelf: yes"),
+        "",
+        _("Covers repaint the next time their screen is drawn. If a line says “no” while ZenOS is running, that ZenOS screen has not been opened yet, or this ZenOS version draws it differently; the log has the reason."),
+    }
+    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
 
 function Whispersync:onZenOSReady() self:registerZenOS() end
@@ -285,7 +337,7 @@ function Whispersync:buildZenStrip(ctx)
         cover_func = function(it) return file_exists(it.cover) and it.cover or nil end,
         percent_func = Catalog.percent,
         status_func = function(it) return Catalog.status_text(it, { exists = file_exists }) end,
-        badge_func = function() return self.settings.kindle_badge end,
+        badge_func = function() return self.settings.kindle_badge and self:badgeStyle() or nil end,
         on_open = function(it) self:openItem(it) end,
         on_empty_tap = function() self:showShelf() end,
         empty_text = self:isConnected() and _("Kindle library\nTap to open") or _("Kindle library\nTap to connect"),
@@ -411,9 +463,29 @@ function Whispersync:addToMainMenu(menu_items)
                 callback = function() self.settings.feed_history = not self.settings.feed_history; self:saveSettings() end,
             },
             {
-                text = _("Kindle badge on covers"),
+                text = _("“Kindle” banner on covers"),
+                help_text = _("A diagonal corner banner, like ZenOS's “New” banner, on every cover that came from your Kindle library: this plugin's shelf, ZenOS Home (Featured, Recent) and ZenOS's library tiles."),
                 checked_func = function() return self.settings.kindle_badge end,
-                callback = function() self.settings.kindle_badge = not self.settings.kindle_badge; self:saveSettings(); if self.shelf then self.shelf:refresh() end end,
+                callback = function() self.settings.kindle_badge = not self.settings.kindle_badge; self:saveSettings(); self:refreshCovers() end,
+            },
+            {
+                text_func = function()
+                    return self.settings.badge_corner == "tr" and _("Banner corner: top right") or _("Banner corner: top left")
+                end,
+                enabled_func = function() return self.settings.kindle_badge end,
+                sub_item_table = {
+                    {
+                        text = _("Top left"),
+                        help_text = _("Keeps clear of ZenOS's progress badge and “New” banner in the top-right corner."),
+                        checked_func = function() return self.settings.badge_corner ~= "tr" end,
+                        callback = function() self.settings.badge_corner = "tl"; self:saveSettings(); self:refreshCovers() end,
+                    },
+                    {
+                        text = _("Top right"),
+                        checked_func = function() return self.settings.badge_corner == "tr" end,
+                        callback = function() self.settings.badge_corner = "tr"; self:saveSettings(); self:refreshCovers() end,
+                    },
+                },
                 separator = true,
             },
             {
@@ -424,8 +496,8 @@ function Whispersync:addToMainMenu(menu_items)
     }
 
     sub[#sub + 1] = {
-        text = _("ZenOS"),
-        enabled_func = function() return Zen.available() end,
+        text_func = function() return Zen.available() and _("ZenOS") or _("ZenOS (not running)") end,
+        help_text = _("Everything here needs the ZenOS plugin. The Kindle banner, the Home strip and the navbar tab appear on their own once ZenOS is installed."),
         sub_item_table = {
             {
                 text_func = function()
@@ -435,6 +507,7 @@ function Whispersync:addToMainMenu(menu_items)
                 end,
                 help_text = _("A native ZenOS folder tab pointing at the download folder: your Kindle books in ZenOS's own cover view, with its sorting and badges. Takes effect after KOReader restarts."),
                 callback = guarded(function()
+                    if not Zen.available() then notify(_("ZenOS is not running."), 4); return end
                     local ok, msg = Zen.addKindleTab(self:libraryDir(), _("Kindle"))
                     if ok then
                         notify(msg == "already there" and _("The Kindle tab is already in the navbar.")
@@ -445,9 +518,14 @@ function Whispersync:addToMainMenu(menu_items)
                 end, "zen tab"),
             },
             {
-                text = _("Kindle library strip on Home"),
-                help_text = _("Home → widgets → “Kindle library” adds a strip of your recent Kindle books; it is registered automatically."),
-                enabled = false,
+                text = _("Kindle library strip on Home…"),
+                help_text = _("A strip of your recent Kindle books for ZenOS's Home page. It is registered automatically; ZenOS decides whether it is shown."),
+                callback = guarded(function() self:showHomeStripInfo() end, "zen strip info"),
+            },
+            {
+                text = _("Banner on ZenOS covers…"),
+                help_text = _("Where the “Kindle” corner banner currently reaches."),
+                callback = guarded(function() self:showBannerInfo() end, "zen banner info"),
             },
         },
     }
@@ -519,8 +597,9 @@ Limits
 
 ZenOS
 • Kindle Whispersync → ZenOS → Add a Kindle tab puts your downloaded Kindle books in ZenOS's own cover view as a navbar tab.
-• Home → widgets → "Kindle library" adds a strip of your recent Kindle books.
-• With "Keep every personal document on this device" and "Feed Amazon read times" on (both default), every Kindle book appears in the native library and in Home → Recent at the time it was last read on a Kindle, with a "K" badge on its cover.
+• ZenOS Settings → Library → Home → Widgets → "Kindle library" adds a strip of your recent Kindle books to Home.
+• With "Keep every personal document on this device" and "Feed Amazon read times" on (both default), every Kindle book appears in the native library and in Home → Recent at the time it was last read on a Kindle.
+• Every cover that came from the Kindle carries a diagonal "Kindle" corner banner (like ZenOS's "New" banner) on this plugin's shelf, on ZenOS Home and on ZenOS library tiles. Library → "Kindle" banner on covers turns it off or moves it to the other corner.
 • Launcher or Controls → Add → Plugin menu → Kindle Whispersync opens the cloud shelf.]]),
             })
         end,

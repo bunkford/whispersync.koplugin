@@ -3,6 +3,24 @@
 Release notes for the Kindle Whispersync KOReader plugin. The newest release
 is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.1
+
+The Kindle mark reaches every ZenOS screen, and the ZenOS menu is tappable.
+
+- **"Kindle" corner banner.** The round "K" badge is replaced by a diagonal
+  corner banner reading *Kindle*, drawn exactly like ZenOS's "New" banner and
+  in ZenOS's badge colours and scale. It now appears on ZenOS Home too (the
+  Featured book, the Recent strip and any other strip that shows a cover), as
+  well as on ZenOS's library tiles and this plugin's own shelf. It defaults to
+  the top-left corner so ZenOS's progress badge and "New" banner keep the
+  top-right; *Library → Banner corner* moves it.
+- **ZenOS menu.** The *ZenOS* submenu is no longer greyed out: its entries
+  work whether or not ZenOS is running (they say so when it is not), the
+  *Kindle library strip on Home…* entry explains where ZenOS turns the strip
+  on, and a new *Banner on ZenOS covers…* entry shows which ZenOS screens the
+  banner has reached.
+- **Sync log** records when the ZenOS hooks are installed, or why not.
+
 ## 0.2.0
 
 ZenOS becomes home ground, and one crash is fixed.
