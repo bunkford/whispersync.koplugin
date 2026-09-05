@@ -10,7 +10,9 @@
           "size": 79430,
           "digest": "sha256:95324809f3cb31fed6950ac52adec3dc006a1c39e94ca04056aeb99b7ea0396f"
         }
-      ]
+      ],
+      "version": "0.2.2",
+      "published_at": "2026-09-05T13:31:04Z"
     },
     {
       "tag_name": "v0.2.1",
@@ -22,7 +24,9 @@
           "size": 78443,
           "digest": "sha256:fa1b462452a498af8231993ba85da3efbed7f5ca8c1c5acd85a37353c784524c"
         }
-      ]
+      ],
+      "version": "0.2.1",
+      "published_at": "2026-09-05T13:24:52Z"
     },
     {
       "tag_name": "v0.2.0",
@@ -34,7 +38,9 @@
           "size": 74252,
           "digest": "sha256:e0e9072e0cc6a83728d0958e98d57b22fd31327ad2676080731e0eec0d03aa5f"
         }
-      ]
+      ],
+      "version": "0.2.0",
+      "published_at": "2026-09-05T12:59:10Z"
     },
     {
       "tag_name": "v0.1.0",
@@ -46,7 +52,9 @@
           "size": 66620,
           "digest": "sha256:97d4755b5cf92dd38b280b86925910b9dddf91b851b683a93a9ee00e6f247393"
         }
-      ]
+      ],
+      "version": "0.1.0",
+      "published_at": "2026-09-05T00:09:10Z"
     }
   ]
 }
