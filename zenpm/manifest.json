@@ -13,6 +13,7 @@
       "description": "Read your Send-to-Kindle library straight from Amazon and keep reading position, bookmarks, highlights and notes in sync with your Kindle account.",
       "author": "bunkford",
       "category": "utility",
+      "icon_url": "https://bunkford.github.io/whispersync.koplugin/icons/whispersync.svg",
       "platforms": [
         "koreader"
       ],
@@ -41,7 +42,8 @@
       "version": "0.1.3",
       "description": "Reads the open book aloud with Microsoft Edge's neural voices, synthesized on the device, and underlines each word as it is spoken. Bluetooth audio on Kindle.",
       "author": "bunkford",
-      "category": "reader",
+      "category": "media",
+      "icon_url": "https://bunkford.github.io/whispersync.koplugin/icons/readaloud.svg",
       "platforms": [
         "koreader"
       ],

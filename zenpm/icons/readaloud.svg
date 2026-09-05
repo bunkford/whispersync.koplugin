@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Read Aloud: a speaker with sound waves -->
+  <path d="M10 25h9l12-10v34L19 39h-9z" fill="#000"/>
+  <path d="M38 22c3 2.5 4.5 6 4.5 10s-1.5 7.5-4.5 10" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+  <path d="M45 15c5 4.5 7.5 10.5 7.5 17s-2.5 12.5-7.5 17" fill="none" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Kindle Whispersync: an e-reader with sync arrows -->
+  <rect x="14" y="6" width="36" height="52" rx="5" fill="none" stroke="#000" stroke-width="4"/>
+  <rect x="20" y="12" width="24" height="30" rx="1.5" fill="#000" opacity="0.15"/>
+  <path d="M25 24a8 8 0 0 1 13-4.5l1.5 1.5" fill="none" stroke="#000" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M39 15.5v6h-6" fill="none" stroke="#000" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M39 30a8 8 0 0 1-13 4.5L24.5 33" fill="none" stroke="#000" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M25 38.5v-6h6" fill="none" stroke="#000" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="50" r="2.5" fill="#000"/>
+</svg>

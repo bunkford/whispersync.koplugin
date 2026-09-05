@@ -11,6 +11,7 @@ writes that site into zenpm/:
     zenpm/packages/<plugin>.koplugin/versions.json  release history + asset URLs
     zenpm/packages/<plugin>.koplugin/README.md      shown as the package page
     zenpm/packages/<plugin>.koplugin/RELEASE_NOTES.md  the plugin CHANGELOG
+    zenpm/icons/<plugin>.svg                        package icons (hand-drawn, not generated)
 
 A run records ONE release for ONE plugin (--plugin, default whispersync), then
 rebuilds manifest.json from every package's newest recorded release, so the
@@ -51,7 +52,7 @@ PLUGINS = {
         "name": "Read Aloud (Edge voices)",
         "description": ("Reads the open book aloud with Microsoft Edge's neural voices, synthesized on the "
                         "device, and underlines each word as it is spoken. Bluetooth audio on Kindle."),
-        "category": "reader",
+        "category": "media",
         "tag_prefix": "readaloud-v",
     },
 }
@@ -89,7 +90,7 @@ def version_of_tag(plugin: str, tag: str) -> str:
     return tag
 
 
-def package_entry(plugin: str, source: str) -> dict | None:
+def package_entry(plugin: str, source: str, repo_url: str = DEFAULT_REPO_URL) -> dict | None:
     """The manifest entry for a plugin from its newest recorded release."""
     releases = load_versions(plugin)
     if not releases:
@@ -106,6 +107,9 @@ def package_entry(plugin: str, source: str) -> dict | None:
         "description": meta["description"],
         "author": "bunkford",
         "category": meta["category"],
+        # ZenPM shows this instead of the category's generic icon; served from
+        # the same Pages site as the manifest (zenpm/icons/<plugin>.svg).
+        "icon_url": repo_url.rstrip("/") + f"/icons/{plugin}.svg",
         "platforms": ["koreader"],
         "dependencies": [],
         "source": source,
@@ -164,7 +168,7 @@ def main() -> int:
 
     packages = []
     for name in PLUGINS:
-        entry = package_entry(name, args.source)
+        entry = package_entry(name, args.source, args.repo_url)
         if entry:
             packages.append(entry)
     manifest = {
