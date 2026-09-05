@@ -189,20 +189,39 @@ KOReader's position as the book's position.
 
 ## ZenOS
 
-Zen Mode hides KOReader's Tools menu, where this plugin's menu lives, so use
-ZenOS's own entry points:
+Everything here is on by default, so with ZenOS the Kindle library looks like
+part of the device rather than a plugin:
 
-- **Launcher or Controls → Add → Plugin menu → Kindle Whispersync** adds a
-  button that opens the shelf (the plugin exposes an `open()` method ZenOS
-  looks for).
-- **Home → widgets → "Kindle library"** adds a strip of your most recently
-  read Kindle books with covers and percentages; tap one to open it, or tap
-  the empty strip to open the shelf.
-- **Launcher → Add → KOReader submenu → Tools → Kindle Whispersync** exposes
-  the full menu if you want the settings reachable in Zen Mode.
+- **A Kindle tab.** *Kindle Whispersync → ZenOS → Add a Kindle tab to the
+  navbar* creates a native ZenOS folder tab pointing at the download folder.
+  Your Kindle books appear in ZenOS's own cover view with its sorting, badges
+  and progress. Restart KOReader once for the tab to show.
+- **The whole library, locally.** *Library → Keep every personal document on
+  this device* downloads all Send-to-Kindle documents during a refresh (files
+  over 40 MB are skipped), which is what lets the native library, Recent and
+  search see them. Turn it off to download only what you open.
+- **Recent that knows your Kindle.** *Library → Feed Amazon read times and
+  progress into history* puts each downloaded book into KOReader's reading
+  history at the time it was last read on a Kindle and writes its progress and
+  finished state into the book's sidecar. ZenOS's Home → Recent strip, progress
+  badges and finished-book dimming read exactly those. A more recent read on
+  this device is never overwritten.
+- **A "K" badge** on the cover of every Kindle book: on the plugin's shelf, on
+  its Home strip, and on ZenOS's own library tiles (bottom-left, lifted above
+  the page-count pill when that is on). *Library → Kindle badge on covers*
+  turns it off.
+- **Home strip.** Home → widgets → *Kindle library* adds a strip of your most
+  recently read Kindle books; tap one to open it.
+- **Launcher / Controls → Add → Plugin menu → Kindle Whispersync** opens the
+  cloud shelf (everything in the account, downloaded or not).
 
-The plugin registers with ZenOS at start-up and again on `ZenOSReady`, so
-load order does not matter.
+Zen Mode hides KOReader's Tools menu, where this plugin's settings live; reach
+them through *Launcher → Add → KOReader submenu → Tools → Kindle Whispersync*,
+or leave Zen Mode briefly.
+
+The tab and the badge reach into ZenOS the same way ZenOS reaches into
+KOReader, and every step is guarded: if a ZenOS update moves something, that
+feature quietly switches off rather than breaking anything.
 
 ## How positions are mapped
 
@@ -304,6 +323,7 @@ main.lua           KOReader glue: menus, hooks, connect page, shelf actions, syn
 catalog.lua        what the shelf knows about each book: titles, progress, sorting, details
 shelf.lua          the cover grid widget, and the ZenOS Home strip
 connectdialog.lua  QR code + address + steps + live status, one screen
+zenos.lua          ZenOS navbar tab, cover badge hook, history/progress hand-off
 amazon.lua         device-stack client: library, sidecar GET/POST, downloads, covers, OAuth registration
 adp.lua            ADP request signing (libcrypto via FFI, `openssl` CLI fallback)
 mobi.lua           MOBI/EXTH headers, PalmDOC decompression, plain-text index, cover location
