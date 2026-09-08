@@ -117,13 +117,28 @@ end
 
 --- The child's work: synthesize, write audio + a JSON sidecar, exit.
 -- Pure of UI; only files. Returned so it can be run inline in tests.
+-- Progress lines go to `log_path` (the plugin's log file) so a freeze
+-- mid-fetch leaves a trace of how far it got.
 function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
     local decoder = self.opts.plan and self.opts.plan.decoder
+    local log_path = self.opts.log_path
+    local function clog(msg)
+        if not log_path then return end
+        local f = io.open(log_path, "a")
+        if f then f:write(os.date("%m-%d %H:%M:%S"), "  child ", tostring(utt.id), ": ", msg, "\n"); f:close() end
+    end
     return function()
         local result, err
+        local t0 = os.time()
         for _, f in ipairs(formats) do
+            clog("requesting " .. f .. " for " .. #utt.text .. " bytes of text")
             result, err = edge.synthesize(utt.text, { voice = settings.voice, speed = settings.speed, format = f, timeout = 40 })
-            if result then result.requested = f; break end
+            if result then
+                result.requested = f
+                clog(("got %d bytes of %s, %d words, %.1fs of audio, in %ds"):format(#result.audio, f, #result.words, result.duration, os.time() - t0))
+                break
+            end
+            clog("no result for " .. f .. ": " .. tostring(err))
             if not edge.is_refusal(err) then break end
         end
         local out = io.open(meta_path .. ".tmp", "wb")
@@ -134,7 +149,10 @@ function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
             -- in the background, keeps playback instant.
             if result.format == edge.FORMATS.mp3 and decoder then
                 local pcm_path = audio_path .. ".pcm"
-                local rate, _c, samples = audio.decode_mp3(decoder, audio_path, pcm_path)
+                clog("decoding with " .. decoder)
+                local td = os.time()
+                local rate, _c, samples, derr = audio.decode_mp3(decoder, audio_path, pcm_path)
+                clog(rate and ("decoded %d samples at %d Hz in %ds"):format(samples, rate, os.time() - td) or ("decode failed: " .. tostring(derr)))
                 if rate then
                     os.remove(audio_path)
                     os.rename(pcm_path, audio_path)
@@ -157,6 +175,7 @@ function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
             out:write(('{"ok":false,"error":%s}'):format(json_escape(tostring(err))))
         end
         if out then out:close(); os.rename(meta_path .. ".tmp", meta_path) end
+        clog("done")
     end
 end
 
@@ -182,9 +201,11 @@ function Player:fetch_next()
     if ffiutil and ffiutil.runInSubProcess then
         local pid, perr = ffiutil.runInSubProcess(function() job() end)
         if not pid then
-            self:log("cannot fork: " .. tostring(perr))
+            self:log("cannot fork: " .. tostring(perr) .. "; fetching in the foreground")
             job() -- fall back to blocking
             pid = nil
+        else
+            self:log(("fetch: utterance %d spawned as pid %s (%d bytes, formats %s)"):format(utt.id, tostring(pid), #utt.text, table.concat(formats, " > ")))
         end
         self.fetch = { utt = utt, pid = pid, meta = meta, audio = audio_path, started = os.time() }
     else
@@ -208,6 +229,7 @@ function Player:collect()
     end
     self.fetch = nil
     local utt = f.utt
+    self:log(("fetch: utterance %d child finished after %ds"):format(utt.id, os.time() - f.started))
     local fh = io.open(f.meta, "rb")
     local meta = fh and fh:read("*a") or nil
     if fh then fh:close() end
@@ -387,6 +409,14 @@ end
 
 function Player:tick()
     if self.state == "idle" then return end
+    -- Heartbeat: a line every 5 s proves the UI loop is alive during a wait.
+    local now = os.time()
+    if not self.last_beat or now - self.last_beat >= 5 then
+        self.last_beat = now
+        local f = self.fetch
+        self:log(("tick: state=%s cur=%d/%d fetch=%s"):format(self.state, self.cur, #self.utterances,
+            f and ("utterance " .. f.utt.id .. " for " .. (now - f.started) .. "s") or "none"))
+    end
     local ok, err = pcall(function()
         if self:collect() then self:fetch_next() end
         local utt = self.utterances[self.cur]

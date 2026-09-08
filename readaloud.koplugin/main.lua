@@ -191,6 +191,7 @@ function ReadAloud:ensureParts()
         ffiutil = okf and ffiutil.runInSubProcess and ffiutil or nil,
         uimanager = UIManager,
         json_decode = edge.json_decode,
+        log_path = self:logFile(),
         on_format = function(fmt) self.settings.format = fmt; self:saveSettings(); self:log("service format: " .. tostring(fmt)) end,
     }
     -- Make sure the cache dir exists for the temp files.
