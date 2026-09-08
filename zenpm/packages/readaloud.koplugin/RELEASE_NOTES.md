@@ -3,6 +3,14 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.4
+
+- **The fetch is traced end to end.** The log now records when each fetch
+  child is spawned and finishes, and the child itself writes its progress
+  (request sent, audio received, decoding, done) into the same file, with a
+  heartbeat line every five seconds while anything is in flight. A freeze now
+  leaves a trace of the exact step it happened in.
+
 ## 0.2.3
 
 Chasing the freeze, with evidence this time.
