@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "tag_name": "readaloud-v0.2.0",
+      "name": "readaloud-v0.2.0",
+      "version": "0.2.0",
+      "published_at": "2026-09-08T00:51:54Z",
+      "assets": [
+        {
+          "name": "readaloud.koplugin.zip",
+          "url": "https://github.com/bunkford/whispersync.koplugin/releases/download/readaloud-v0.2.0/readaloud.koplugin.zip",
+          "size": 516042,
+          "digest": "sha256:c011cfd7b7c32602566f95348c99be8e58a339263f0625ea158dc2ee34636099"
+        }
+      ]
+    },
+    {
       "tag_name": "readaloud-v0.1.5",
       "name": "readaloud-v0.1.5",
       "version": "0.1.5",
