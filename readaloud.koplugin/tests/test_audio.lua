@@ -65,6 +65,19 @@ H.eq(A.stream_schedule(nil, 100, 1.7), 101.2, "first file: after the output late
 H.eq(A.stream_schedule(130, 100, 1.7), 130, "queued behind what is already playing: no gap")
 H.eq(A.stream_schedule(100.5, 100, 1.7), 101.2, "queue nearly dry: the later of the two")
 
+-- Spawning detaches the job's stdio before it starts, so a job blocked on a FIFO cannot hold the pipe
+H.eq(A.spawn_command("gst-launch x < /tmp/f"), "sh -c 'gst-launch x < /tmp/f' </dev/null >/dev/null 2>&1 & echo $!", "background job with detached stdio, pid echoed")
+local t0 = os.time()
+local pid = A.spawn("sleep 3")
+H.ok(pid and pid > 0, "spawn returns a pid: " .. tostring(pid)); H.ok(os.time() - t0 < 2, "and returns at once, not after the job")
+os.execute("kill " .. tostring(pid) .. " 2>/dev/null; pkill -P " .. tostring(pid) .. " 2>/dev/null")
+-- a job blocked on a FIFO with no writer must not block the spawn either
+local fifo = os.tmpname(); os.remove(fifo); os.execute("mkfifo " .. fifo)
+t0 = os.time()
+local bpid = A.spawn("cat < " .. fifo)
+H.ok(bpid and os.time() - t0 < 2, "spawn returns while the job waits on the FIFO")
+os.execute("pkill -P " .. tostring(bpid) .. " 2>/dev/null; kill " .. tostring(bpid) .. " 2>/dev/null"); os.remove(fifo)
+
 -- Position accounts for seek and latency
 local h = { started = A.now() - 10, seek = 5, latency = 1.5 }
 H.near(A.position(h), 13.5, 0.05, "position = seek + elapsed - latency")

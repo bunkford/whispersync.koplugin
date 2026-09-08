@@ -30,6 +30,12 @@ M.PCM_RATE = 24000
 local function sh_quote(s) return "'" .. tostring(s):gsub("'", "'\\''") .. "'" end
 M.sh_quote = sh_quote
 
+--- Kill leftover mixersink pipelines without matching our own shell:
+-- the bracket trick keeps the pattern out of pkill's own command line.
+function M.kill_mixersink_pipelines()
+    os.execute("pkill -f '[m]ixersink stream-type=Music' 2>/dev/null")
+end
+
 --- Decide the playback plan. `env` = { kindle = bool, has = function(cmd) -> bool,
 -- ffmpeg = path or nil }. Returns { backend, gst, lipc, ffmpeg, formats, latency }.
 -- `formats` are Edge output formats in the order to try; the first the
@@ -261,6 +267,24 @@ function M.start_lipc(plan, file)
         :format(table.concat(seen, ", "), M.lipc_query("TTS_State"))
 end
 
+--- The shell line that runs `cmd` in the background and prints its pid.
+-- The job's stdin/stdout/stderr are detached BEFORE the job starts, so a
+-- command that blocks on opening a FIFO (the stream player waits for the
+-- feeder) cannot hold io.popen's pipe open and freeze the caller: the
+-- outer shell's `echo $!` reaches EOF as soon as it runs. Pure, for tests.
+function M.spawn_command(cmd)
+    return "sh -c " .. sh_quote(cmd) .. " </dev/null >/dev/null 2>&1 & echo $!"
+end
+
+local function spawn(cmd)
+    local p = io.popen(M.spawn_command(cmd))
+    if not p then return nil end
+    local pid = tonumber((p:read("*a") or ""):match("%d+"))
+    p:close()
+    return pid
+end
+M.spawn = spawn
+
 --- Start playing. Returns a handle { pid, started, plan, file } or nil, err.
 -- `seek` seconds; for Kindle PCM the padded temp file is built here.
 function M.start(plan, file, fmt, seek, tmpdir)
@@ -286,19 +310,16 @@ function M.start(plan, file, fmt, seek, tmpdir)
     if player == "gst" then
         kindle_focus()
         -- Old pipelines still draining would play over the new one.
-        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+        M.kill_mixersink_pipelines()
         play_file = (tmpdir or "/tmp") .. "/readaloud-play.pcm"
         os.execute(M.prepare_pcm_command(file, play_file, seek, fmt == edge.FORMATS.wav))
     elseif player == "ffmpeg-gst" then
         kindle_focus()
-        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+        M.kill_mixersink_pipelines()
     end
     local cmd, cerr = M.command(plan, play_file, fmt, seek)
     if not cmd then return nil, cerr end
-    local p = io.popen("sh -c " .. sh_quote(cmd .. " >/dev/null 2>&1") .. " & echo $!")
-    if not p then return nil, "cannot spawn player" end
-    local pid = tonumber((p:read("*a") or ""):match("%d+"))
-    p:close()
+    local pid = M.spawn(cmd)
     if not pid then return nil, "player did not start" end
     return { pid = pid, started = M.now(), plan = plan, file = file, seek = seek, latency = plan.latency,
              temp = play_file ~= file and play_file or nil, player = player }
@@ -345,7 +366,7 @@ function M.stop(handle)
         os.execute("pkill -P " .. handle.pid .. " 2>/dev/null; kill " .. handle.pid .. " 2>/dev/null")
     end
     if handle.player == "gst" or handle.player == "ffmpeg-gst" then
-        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+        M.kill_mixersink_pipelines()
     end
     if handle.temp then os.remove(handle.temp) end
 end
@@ -425,13 +446,6 @@ function M.stream_command(plan)
     return nil, "no streaming player for " .. tostring(plan.backend)
 end
 
-local function spawn(cmd)
-    local p = io.popen("sh -c " .. sh_quote(cmd .. " >/dev/null 2>&1") .. " & echo $!")
-    if not p then return nil end
-    local pid = tonumber((p:read("*a") or ""):match("%d+"))
-    p:close()
-    return pid
-end
 
 --- A directory on a filesystem that supports FIFOs. KOReader's cache on
 -- Kindle sits on the FAT user partition, where mkfifo fails; /tmp is tmpfs.
@@ -446,6 +460,7 @@ function M.stream_dir(tmpdir)
 end
 
 --- Start the stream. Returns { dir, fifo, feeder_pid, player_pid, started, latency, seq }.
+
 function M.stream_start(plan, tmpdir)
     local cmd, err = M.stream_command(plan)
     if not cmd then return nil, err end
@@ -459,7 +474,7 @@ function M.stream_start(plan, tmpdir)
     local alive = io.open(dir .. "/.alive", "wb"); if alive then alive:close() end
     if plan.backend == "kindle-gst" then
         kindle_focus()
-        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+        M.kill_mixersink_pipelines()
     end
     -- Reader and writer each block until the other opens the FIFO; both go
     -- to the background and meet there.
@@ -504,7 +519,7 @@ function M.stream_stop(stream)
         if pid then os.execute("pkill -P " .. pid .. " 2>/dev/null; kill " .. pid .. " 2>/dev/null") end
     end
     if stream.plan and stream.plan.backend == "kindle-gst" then
-        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+        M.kill_mixersink_pipelines()
     end
     if stream.dir then os.execute("rm -rf " .. sh_quote(stream.dir)) end
 end
