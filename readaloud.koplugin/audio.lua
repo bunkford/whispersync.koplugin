@@ -42,13 +42,16 @@ function M.plan(env)
         local gst = (env.has("gst-launch-1.0") and "gst-launch-1.0") or (env.has("gst-launch-0.10") and "gst-launch-0.10") or nil
         local lipc = env.has("lipc-set-prop")
         local formats = {}
+        -- The service has only ever honoured MP3 in practice; with a decoder
+        -- on board it goes first so nothing is wasted on refused formats.
+        if gst and env.decoder then formats[#formats + 1] = edge.FORMATS.mp3 end
         if gst then formats[#formats + 1] = edge.FORMATS.pcm; formats[#formats + 1] = edge.FORMATS.wav end
-        if (gst and env.ffmpeg) or lipc then formats[#formats + 1] = edge.FORMATS.mp3 end
+        if not (gst and env.decoder) and ((gst and env.ffmpeg) or lipc) then formats[#formats + 1] = edge.FORMATS.mp3 end
         if #formats == 0 then
             return { backend = "none", formats = { edge.FORMATS.mp3 }, latency = 0, reason = "no gst-launch or lipc-set-prop on this Kindle" }
         end
         return { backend = gst and "kindle-gst" or "kindle-lipc", gst = gst, lipc = lipc, ffmpeg = env.ffmpeg,
-                 formats = formats, latency = M.KINDLE_LATENCY }
+                 decoder = gst and env.decoder or nil, formats = formats, latency = M.KINDLE_LATENCY }
     end
     for _, p in ipairs({ "ffplay", "mpv", "paplay", "aplay" }) do
         if env.has(p) then
@@ -73,9 +76,10 @@ function M.player_for(plan, fmt)
     local edge = require("edge")
     if plan.backend == "kindle-gst" or plan.backend == "kindle-lipc" then
         if fmt == edge.FORMATS.mp3 then
+            if plan.gst and plan.decoder then return "decode-gst" end
             if plan.gst and plan.ffmpeg then return "ffmpeg-gst" end
             if plan.lipc then return "lipc" end
-            return nil, "MP3 needs an ffmpeg binary or Amazon's player, neither is available"
+            return nil, "MP3 needs the bundled decoder, an ffmpeg binary or Amazon's player; none is available"
         end
         if plan.gst then return "gst" end
         return nil, "raw audio needs gst-launch, which this Kindle lacks"
@@ -172,9 +176,42 @@ function M.find_ffmpeg(plugin_dir)
     return nil
 end
 
+--- The bundled MP3 decoder that runs on this device (bin/mp3dec-armhf for
+-- hard-float firmware, bin/mp3dec-armel for the old soft-float ABI): the
+-- first candidate whose --probe answers. ZenPM's unzip may drop the execute
+-- bit, so it is restored first.
+function M.find_decoder(plugin_dir)
+    if not plugin_dir then return nil end
+    for _, name in ipairs({ "mp3dec-armhf", "mp3dec-armel" }) do
+        local path = plugin_dir .. "/bin/" .. name
+        local f = io.open(path, "rb")
+        if f then
+            f:close()
+            os.execute("chmod +x " .. sh_quote(path) .. " 2>/dev/null")
+            local p = io.popen(sh_quote(path) .. " --probe 2>/dev/null")
+            local out = p and p:read("*a") or ""
+            if p then p:close() end
+            if out:find("mp3dec ok", 1, true) then return path end
+        end
+    end
+    return nil
+end
+
+--- Decode an MP3 file to raw s16le PCM with the bundled decoder.
+-- Returns rate, channels, samples; or nil, err.
+function M.decode_mp3(decoder, mp3_path, pcm_path)
+    local p = io.popen(sh_quote(decoder) .. " " .. sh_quote(mp3_path) .. " " .. sh_quote(pcm_path) .. " 2>&1")
+    local out = p and p:read("*a") or ""
+    if p then p:close() end
+    local rate, channels, samples = out:match("rate=(%d+) channels=(%d+) samples=(%d+)")
+    if not rate then return nil, "mp3dec: " .. (out:gsub("%s+$", "")) end
+    return tonumber(rate), tonumber(channels), tonumber(samples)
+end
+
 --- The plan for this device.
 function M.detect(is_kindle, plugin_dir)
-    return M.plan({ kindle = is_kindle, has = M.has_command, ffmpeg = M.find_ffmpeg(plugin_dir) })
+    return M.plan({ kindle = is_kindle, has = M.has_command, ffmpeg = M.find_ffmpeg(plugin_dir),
+                    decoder = is_kindle and M.find_decoder(plugin_dir) or nil })
 end
 
 local focus_taken = false
@@ -238,6 +275,14 @@ function M.start(plan, file, fmt, seek, tmpdir)
         return M.start_lipc(plan, file)
     end
     local play_file = file
+    if player == "decode-gst" then
+        -- Decode to PCM first (a minute of speech takes well under a second),
+        -- then continue exactly as for PCM.
+        local pcm = (tmpdir or "/tmp") .. "/readaloud-decoded.pcm"
+        local rate, _c, _n, derr = M.decode_mp3(plan.decoder, file, pcm)
+        if not rate then return nil, derr end
+        file, fmt, player = pcm, edge.FORMATS.pcm, "gst"
+    end
     if player == "gst" then
         kindle_focus()
         -- Old pipelines still draining would play over the new one.

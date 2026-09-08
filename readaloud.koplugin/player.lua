@@ -99,24 +99,39 @@ end
 --- The child's work: synthesize, write audio + a JSON sidecar, exit.
 -- Pure of UI; only files. Returned so it can be run inline in tests.
 function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
+    local decoder = self.opts.plan and self.opts.plan.decoder
     return function()
         local result, err
         for _, f in ipairs(formats) do
             result, err = edge.synthesize(utt.text, { voice = settings.voice, speed = settings.speed, format = f, timeout = 40 })
-            if result then break end
+            if result then result.requested = f; break end
             if not edge.is_refusal(err) then break end
         end
         local out = io.open(meta_path .. ".tmp", "wb")
         if result then
             local a = io.open(audio_path, "wb")
             if a then a:write(result.audio); a:close() end
+            -- With the bundled decoder, hand the player PCM: decoding here,
+            -- in the background, keeps playback instant.
+            if result.format == edge.FORMATS.mp3 and decoder then
+                local pcm_path = audio_path .. ".pcm"
+                local rate, _c, samples = audio.decode_mp3(decoder, audio_path, pcm_path)
+                if rate then
+                    os.remove(audio_path)
+                    os.rename(pcm_path, audio_path)
+                    result.format = edge.FORMATS.pcm
+                    result.duration = samples / rate
+                    local fh = io.open(audio_path, "rb")
+                    if fh then result.audio = fh:read("*a"); fh:close() end
+                end
+            end
             local words = {}
             for i, w in ipairs(result.words) do
                 words[i] = ('{"text":%s,"t0":%.3f,"t1":%.3f}'):format(json_escape(w.text), w.t0, w.t1)
             end
             if out then
-                out:write(('{"ok":true,"format":%s,"duration":%.3f,"bytes":%d,"words":[%s]}'):format(
-                    json_escape(result.format), result.duration, #result.audio, table.concat(words, ",")))
+                out:write(('{"ok":true,"format":%s,"requested":%s,"duration":%.3f,"bytes":%d,"words":[%s]}'):format(
+                    json_escape(result.format), json_escape(result.requested or result.format), result.duration, #result.audio, table.concat(words, ",")))
             end
         elseif out then
             out:write(('{"ok":false,"error":%s}'):format(json_escape(tostring(err))))
@@ -185,9 +200,10 @@ function Player:collect()
         utt.duration = tonumber(data.duration) or 0
         utt.words = data.words or {}
         -- Remember the format the service honoured, so later fetches ask for it first.
+        local honoured = data.requested or data.format
         for i, fmt in ipairs(self.opts.plan and self.opts.plan.formats or {}) do
-            if fmt == data.format then
-                if self.format_index ~= i and self.opts.on_format then self.opts.on_format(data.format) end
+            if fmt == honoured then
+                if self.format_index ~= i and self.opts.on_format then self.opts.on_format(honoured) end
                 self.format_index = i
             end
         end

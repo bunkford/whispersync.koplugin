@@ -18,6 +18,11 @@ H.eq(k0.gst, "gst-launch-0.10", "0.10 on old firmware"); H.eq(k0.formats[3], edg
 H.eq(A.player_for(k0, edge.FORMATS.mp3), "ffmpeg-gst", "mp3 with ffmpeg -> decode into mixersink")
 local kg = A.plan(env(true, { "gst-launch-1.0" }))
 H.eq(#kg.formats, 2, "gst alone: no mp3 player at all"); H.eq(select(2, A.player_for(kg, edge.FORMATS.mp3)) ~= nil, true, "mp3 refused with a reason")
+-- With the bundled decoder, MP3 comes first and decodes into the PCM pipeline
+local kd = A.plan({ kindle = true, has = function(c) return c == "gst-launch-1.0" or c == "lipc-set-prop" end, decoder = "/p/bin/mp3dec-armhf" })
+H.eq(kd.formats[1], edge.FORMATS.mp3, "decoder on board: ask for mp3 first"); H.eq(#kd.formats, 3, "pcm and wav still listed after it")
+H.eq(A.player_for(kd, edge.FORMATS.mp3), "decode-gst", "mp3 -> decode then mixersink"); H.eq(kd.decoder, "/p/bin/mp3dec-armhf", "decoder path kept")
+H.eq(A.find_decoder("/nonexistent"), nil, "no decoder dir -> nil")
 local kl = A.plan(env(true, { "lipc-set-prop" }))
 H.eq(kl.backend, "kindle-lipc", "no gst -> Amazon's player"); H.eq(kl.formats[1], edge.FORMATS.mp3, "which wants mp3")
 H.eq(A.plan(env(true, {})).backend, "none", "nothing usable -> none")
