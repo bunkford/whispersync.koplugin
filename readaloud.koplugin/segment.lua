@@ -87,9 +87,14 @@ end
 -- then gets a full stop, so the voice pauses there).
 -- Returns list of { xp0, xp1, text } and the xpointer to continue from
 -- (nil at the end of the book).
-function M.sentences_from(doc, xp, budget_bytes, max)
+function M.sentences_from(doc, xp, budget_bytes, max, deadline, clock)
     budget_bytes = budget_bytes or M.MAX_UTTERANCE_BYTES
     max = max or M.MAX_UTTERANCE_SENTENCES
+    clock = clock or (deadline and (function()
+        local ok, socket = pcall(require, "socket")
+        if ok and socket and socket.gettime then return socket.gettime end
+        return os.time
+    end)())
     local out, total = {}, 0
     local s = M.first_word_start(doc, xp)
     local cur_words, cur_xp0 = {}, nil
@@ -109,16 +114,21 @@ function M.sentences_from(doc, xp, budget_bytes, max)
     while s and #out < max and total < budget_bytes do
         guard = guard + 1
         if guard > 4000 then break end
+        -- Stay inside the UI tick: stop at a sentence boundary once the deadline passes.
+        if deadline and #cur_words == 0 and #out > 0 and clock() > deadline then break end
         local eok, e = pcall(doc.getNextVisibleWordEnd, doc, s)
         if not eok or not e or e == "" then break end
         local tok, word = pcall(doc.getTextFromXPointers, doc, s, e)
         word = tok and type(word) == "string" and word or ""
         local n = M.word_start_after(doc, e)
         local gap = ""
-        if n then
+        local same_block = n and M.block_of(n) == M.block_of(s)
+        if n and (same_block or M.block_of(n) == "") then
             local gok, g = pcall(doc.getTextFromXPointers, doc, e, n)
             gap = gok and type(g) == "string" and g or " "
             if gap == "" then gap = " " end
+        elseif n then
+            gap = "\n" -- a new paragraph; never ask crengine for a range across blocks
         end
         if not cur_xp0 then cur_xp0 = s end
         cur_words[#cur_words + 1] = word .. gap

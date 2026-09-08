@@ -3,6 +3,24 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.3
+
+Chasing the freeze, with evidence this time.
+
+- **A log that survives a power cycle.** Every line now goes straight to
+  `koreader/readaloud.log` (the old log lived in settings that are only
+  flushed later, so a freeze erased exactly the lines that mattered). *Audio →
+  Log* shows the file.
+- **The stream works on Kindle.** KOReader's cache sits on the FAT user
+  partition, where a FIFO cannot be created, so the continuous stream never
+  actually engaged there. Its FIFO and queue now live on /tmp, and queue
+  entries are small job files naming the PCM to play, so nothing is copied or
+  hard-linked.
+- **The word walk is sliced.** crengine is asked for at most ~0.15 s of work
+  per tick; a group accumulates over several ticks and is finalized when it
+  reaches its size. Text between words is never requested across a paragraph
+  boundary.
+
 ## 0.2.2
 
 Fixes a freeze while "Fetching audio…" that needed a power cycle.

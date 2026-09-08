@@ -75,25 +75,35 @@ end
 --- Keep QUEUE_AHEAD utterances queued after the current one.
 function Player:fill()
     local doc = self.ui.document
-    local guard = 0
-    -- One utterance's worth of walking per call: a two-minute group is a few
-    -- hundred crengine calls, and the UI tick must stay short.
-    while self.cursor and (#self.utterances - math.max(self.cur, 1)) < QUEUE_AHEAD and guard < 1 do
-        guard = guard + 1
-        local t0 = audio.now()
-        local budget = #self.utterances == 0 and segment.FIRST_UTTERANCE_BYTES or segment.MAX_UTTERANCE_BYTES
-        local sentences, nxt = segment.sentences_from(doc, self.cursor, budget, segment.MAX_UTTERANCE_SENTENCES)
-        self.cursor = nxt
-        if #sentences == 0 then break end
-        for _, g in ipairs(segment.group(sentences, budget, segment.MAX_UTTERANCE_SENTENCES)) do
-            self.seq = self.seq + 1
-            g.id = self.seq
-            g.status = "pending"
-            g.attempts = 0
-            self.utterances[#self.utterances + 1] = g
-            self:log(("utterance %d: %d sentences, %d bytes, walked in %.2fs: %s"):format(
-                g.id, #g.sentences, #g.text, audio.now() - t0, g.text:sub(1, 80):gsub("%s+", " ")))
-        end
+    if not self.cursor or (#self.utterances - math.max(self.cur, 1)) >= QUEUE_AHEAD then return end
+    -- Walk a slice at a time (a deadline of ~0.15 s of crengine calls per
+    -- tick) into a building utterance; it is finalized when it reaches its
+    -- budget or the walker stops at the end of the book.
+    local t0 = audio.now()
+    local budget = (#self.utterances == 0 and not self.building) and segment.FIRST_UTTERANCE_BYTES or segment.MAX_UTTERANCE_BYTES
+    local b = self.building or { sentences = {}, bytes = 0 }
+    self.building = b
+    local remaining = math.max(60, budget - b.bytes)
+    local sentences, nxt = segment.sentences_from(doc, self.cursor, remaining, segment.MAX_UTTERANCE_SENTENCES - #b.sentences, t0 + 0.15, audio.now)
+    for _, s in ipairs(sentences) do
+        b.sentences[#b.sentences + 1] = s
+        b.bytes = b.bytes + #s.text + 1
+    end
+    local stalled = nxt == self.cursor and #sentences == 0
+    self.cursor = nxt
+    local complete = b.bytes >= budget or #b.sentences >= segment.MAX_UTTERANCE_SENTENCES or not nxt or stalled
+    if stalled then self.cursor = nil end
+    if complete and #b.sentences > 0 then
+        local texts = {}
+        for i, s in ipairs(b.sentences) do texts[i] = s.text end
+        self.seq = self.seq + 1
+        local g = { sentences = b.sentences, text = table.concat(texts, " "), id = self.seq, status = "pending", attempts = 0 }
+        self.utterances[#self.utterances + 1] = g
+        self.building = nil
+        self:log(("utterance %d: %d sentences, %d bytes (last slice %.2fs): %s"):format(
+            g.id, #g.sentences, #g.text, audio.now() - t0, g.text:sub(1, 80):gsub("%s+", " ")))
+    elseif complete then
+        self.building = nil
     end
 end
 
@@ -465,8 +475,12 @@ function Player:start(xp)
     if not xp then return false, "no position" end
     self.cursor = xp
     self.utterances = {}
+    self.building = nil
     self.cur = 1
-    self:fill()
+    -- The first utterance is short; give it up to a second of walking now
+    -- so the first request goes out at once.
+    local deadline = audio.now() + 1.0
+    while #self.utterances == 0 and self.cursor and audio.now() < deadline do self:fill() end
     if #self.utterances == 0 then return false, "nothing to read here" end
     self:set_state("preparing")
     self:fetch_next()
@@ -558,6 +572,7 @@ function Player:stop()
         if u.file then os.remove(u.file) end
     end
     self.utterances = {}
+    self.building = nil
     self.cur = 0
     self.cursor = nil
     self.word_index = nil

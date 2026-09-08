@@ -65,7 +65,20 @@ function ReadAloud:init()
     for k, v in pairs(DEFAULTS) do
         if self.settings[k] == nil then self.settings[k] = v end
     end
-    self.synclog = self.store:readSetting("log") or {}
+    self.synclog = {}
+    -- Keep the file from growing without bound: trim it at start-up.
+    pcall(function()
+        local f = io.open(self:logFile(), "rb")
+        if f then
+            local size = f:seek("end"); f:close()
+            if size > 512 * 1024 then
+                local tail = self:logTail(400)
+                local w = io.open(self:logFile(), "wb")
+                if w then for i = #tail, 1, -1 do w:write(tail[i], "\n") end; w:close() end
+            end
+        end
+    end)
+    self:log("plugin loaded")
     self:onDispatcherRegisterActions()
     if self.ui and self.ui.menu then self.ui.menu:registerToMainMenu(self) end
 end
@@ -75,12 +88,35 @@ function ReadAloud:saveSettings()
     self.store:flush()
 end
 
+--- The log file: appended and closed on every line, so it survives a
+-- freeze that needs a power cycle (settings are only flushed later).
+function ReadAloud:logFile()
+    return DataStorage:getDataDir() .. "/readaloud.log"
+end
+
 function ReadAloud:log(msg)
     logger.info("readaloud:", msg)
+    local line = os.date("%m-%d %H:%M:%S") .. "  " .. msg
     self.synclog = self.synclog or {}
-    self.synclog[#self.synclog + 1] = os.date("%m-%d %H:%M:%S") .. "  " .. msg
+    self.synclog[#self.synclog + 1] = line
     while #self.synclog > LOG_LINES do table.remove(self.synclog, 1) end
-    self.store:saveSetting("log", self.synclog)
+    local f = io.open(self:logFile(), "a")
+    if f then f:write(line, "\n"); f:close() end
+end
+
+--- Last `n` lines of the log file (newest first).
+function ReadAloud:logTail(n)
+    local f = io.open(self:logFile(), "rb")
+    if not f then return {} end
+    local size = f:seek("end")
+    f:seek("set", math.max(0, size - 64 * 1024))
+    local data = f:read("*a") or ""
+    f:close()
+    local lines = {}
+    for l in data:gmatch("[^\n]+") do lines[#lines + 1] = l end
+    local out = {}
+    for i = #lines, math.max(1, #lines - (n or 200) + 1), -1 do out[#out + 1] = lines[i] end
+    return out
 end
 
 function ReadAloud:pluginDir()
@@ -298,8 +334,10 @@ end
 
 function ReadAloud:showLog()
     local TextViewer = require("ui/widget/textviewer")
-    local lines = {}
-    for i = #self.synclog, 1, -1 do lines[#lines + 1] = self.synclog[i] end
+    local lines = self:logTail(300)
+    if #lines == 0 then
+        for i = #self.synclog, 1, -1 do lines[#lines + 1] = self.synclog[i] end
+    end
     UIManager:show(TextViewer:new{ title = _("Read aloud log"), text = #lines > 0 and table.concat(lines, "\n") or _("Nothing yet.") })
 end
 

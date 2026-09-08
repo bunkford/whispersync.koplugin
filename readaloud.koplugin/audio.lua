@@ -387,10 +387,12 @@ dd if=/dev/zero bs=24000 count=1 2>/dev/null >&3
 nap() { usleep 100000 2>/dev/null || sleep 1; }
 while [ -e "$q/.alive" ]; do
   if [ -n "$player" ] && ! kill -0 "$player" 2>/dev/null; then break; fi
-  f=$(ls "$q"/*.pcm 2>/dev/null | head -n 1)
+  f=$(ls "$q"/*.job 2>/dev/null | head -n 1)
   if [ -n "$f" ]; then
-    echo "$(basename "$f")" >> "$q/started.log"
-    cat "$f" >&3
+    # a .job file holds the path of the PCM to play and the byte offset to start at
+    read -r path skip < "$f"
+    echo "$(basename "$f") $path +$skip $(date +%s)" >> "$q/started.log"
+    if [ "${skip:-0}" -gt 0 ]; then tail -c +$((skip + 1)) "$path" >&3; else cat "$path" >&3; fi
     rm -f "$f"
   else
     nap
@@ -431,15 +433,25 @@ local function spawn(cmd)
     return pid
 end
 
+--- A directory on a filesystem that supports FIFOs. KOReader's cache on
+-- Kindle sits on the FAT user partition, where mkfifo fails; /tmp is tmpfs.
+function M.stream_dir(tmpdir)
+    for _, base in ipairs({ "/tmp", "/var/tmp", tmpdir or "/tmp" }) do
+        local dir = base .. "/readaloud-stream"
+        os.execute("rm -rf " .. sh_quote(dir) .. "; mkdir -p " .. sh_quote(dir))
+        local ok = os.execute("mkfifo " .. sh_quote(dir .. "/audio.fifo") .. " 2>/dev/null")
+        if ok == 0 or ok == true then return dir end
+    end
+    return nil
+end
+
 --- Start the stream. Returns { dir, fifo, feeder_pid, player_pid, started, latency, seq }.
 function M.stream_start(plan, tmpdir)
     local cmd, err = M.stream_command(plan)
     if not cmd then return nil, err end
-    local dir = (tmpdir or "/tmp") .. "/readaloud-stream"
-    os.execute("rm -rf " .. sh_quote(dir) .. "; mkdir -p " .. sh_quote(dir))
+    local dir = M.stream_dir(tmpdir)
+    if not dir then return nil, "no filesystem here accepts a FIFO (tried /tmp, /var/tmp and the cache directory)" end
     local fifo = dir .. "/audio.fifo"
-    local ok = os.execute("mkfifo " .. sh_quote(fifo) .. " 2>/dev/null")
-    if not (ok == 0 or ok == true) then return nil, "cannot create a FIFO in " .. dir end
     local script = dir .. "/feeder.sh"
     local f = io.open(script, "wb")
     if not f then return nil, "cannot write the feeder script" end
@@ -462,20 +474,19 @@ function M.stream_start(plan, tmpdir)
 end
 
 --- Queue a PCM file (from `skip_bytes` in) to play after whatever is queued.
+-- The queue entry is a tiny job file naming the PCM path and offset; the
+-- feeder streams the file from where it is (no copy, no hard link).
 -- Returns the queued path or nil, err.
 function M.stream_enqueue(stream, pcm_file, skip_bytes)
     stream.seq = stream.seq + 1
-    local dst = ("%s/%06d.pcm"):format(stream.dir, stream.seq)
+    local dst = ("%s/%06d.job"):format(stream.dir, stream.seq)
     skip_bytes = skip_bytes or 0
-    local ok
-    if skip_bytes > 0 then
-        -- whole frames only, so a mid-sample start does not turn into noise
-        skip_bytes = skip_bytes - skip_bytes % 2
-        ok = os.execute(("tail -c +%d %s > %s 2>/dev/null"):format(skip_bytes + 1, sh_quote(pcm_file), sh_quote(dst .. ".tmp")))
-    else
-        ok = os.execute("ln " .. sh_quote(pcm_file) .. " " .. sh_quote(dst .. ".tmp") .. " 2>/dev/null || cp " .. sh_quote(pcm_file) .. " " .. sh_quote(dst .. ".tmp"))
-    end
-    if not (ok == 0 or ok == true) then return nil, "cannot queue " .. pcm_file end
+    skip_bytes = skip_bytes - skip_bytes % 2 -- whole samples only
+    if pcm_file:find("[%s'\"]") then return nil, "cannot queue a path with spaces or quotes: " .. pcm_file end
+    local f = io.open(dst .. ".tmp", "wb")
+    if not f then return nil, "cannot write a queue entry in " .. stream.dir end
+    f:write(pcm_file, " ", tostring(skip_bytes), "\n")
+    f:close()
     os.rename(dst .. ".tmp", dst)
     return dst
 end
