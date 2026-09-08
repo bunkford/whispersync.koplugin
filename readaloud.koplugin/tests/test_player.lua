@@ -57,11 +57,12 @@ segment.MAX_UTTERANCE_SENTENCES = 2
 
 H.ok(p:start("1s"), "start from the first word")
 H.eq(p.state, "preparing", "waits for audio first")
-H.ok(#p.utterances >= 2, "utterances queued ahead: " .. #p.utterances)
+H.eq(#p.utterances, 1, "start walks one group only; the tick adds the rest")
 H.eq(p.utterances[1].text, "w1 w2 w3 w4 w5. w6 w7 w8 w9 w10.", "first utterance is two sentences")
 -- First tick: the (inline) fetch has run; collect -> ready -> playing
 p:tick()
 H.eq(p.state, "playing", "playing after the first tick")
+H.ok(#p.utterances >= 2, "a second group walked on the tick: " .. #p.utterances)
 H.eq(#started, 1, "audio started once"); H.eq(started[1].fmt, edge.FORMATS.mp3, "fell back to mp3 after pcm was refused")
 H.eq(synth_calls[1].format, edge.FORMATS.pcm, "asked for pcm first"); H.eq(synth_calls[2].format, edge.FORMATS.mp3, "then mp3")
 H.eq(p.format_index, 2, "remembers the format that worked")

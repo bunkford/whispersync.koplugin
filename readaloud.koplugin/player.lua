@@ -76,8 +76,11 @@ end
 function Player:fill()
     local doc = self.ui.document
     local guard = 0
-    while self.cursor and (#self.utterances - math.max(self.cur, 1)) < QUEUE_AHEAD and guard < 4 do
+    -- One utterance's worth of walking per call: a two-minute group is a few
+    -- hundred crengine calls, and the UI tick must stay short.
+    while self.cursor and (#self.utterances - math.max(self.cur, 1)) < QUEUE_AHEAD and guard < 1 do
         guard = guard + 1
+        local t0 = audio.now()
         local budget = #self.utterances == 0 and segment.FIRST_UTTERANCE_BYTES or segment.MAX_UTTERANCE_BYTES
         local sentences, nxt = segment.sentences_from(doc, self.cursor, budget, segment.MAX_UTTERANCE_SENTENCES)
         self.cursor = nxt
@@ -88,6 +91,8 @@ function Player:fill()
             g.status = "pending"
             g.attempts = 0
             self.utterances[#self.utterances + 1] = g
+            self:log(("utterance %d: %d sentences, %d bytes, walked in %.2fs: %s"):format(
+                g.id, #g.sentences, #g.text, audio.now() - t0, g.text:sub(1, 80):gsub("%s+", " ")))
         end
     end
 end
@@ -125,8 +130,8 @@ function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
                     os.rename(pcm_path, audio_path)
                     result.format = edge.FORMATS.pcm
                     result.duration = samples / rate
-                    local fh = io.open(audio_path, "rb")
-                    if fh then result.audio = fh:read("*a"); fh:close() end
+                    result.audio = nil
+                    result.bytes = samples * 2
                 end
             end
             local words = {}
@@ -135,7 +140,8 @@ function Player:fetch_job(utt, formats, settings, audio_path, meta_path)
             end
             if out then
                 out:write(('{"ok":true,"format":%s,"requested":%s,"duration":%.3f,"bytes":%d,"words":[%s]}'):format(
-                    json_escape(result.format), json_escape(result.requested or result.format), result.duration, #result.audio, table.concat(words, ",")))
+                    json_escape(result.format), json_escape(result.requested or result.format), result.duration,
+                    result.bytes or (result.audio and #result.audio) or 0, table.concat(words, ",")))
             end
         elseif out then
             out:write(('{"ok":false,"error":%s}'):format(json_escape(tostring(err))))
@@ -236,7 +242,9 @@ end
 
 function Player:ensure_stream()
     if self.stream then return self.stream end
+    local t0 = audio.now()
     local stream, err = audio.stream_start(self.opts.plan, self.opts.tmpdir)
+    if stream then self:log(("stream started in %.2fs (player %s, feeder %s)"):format(audio.now() - t0, tostring(stream.player_pid), tostring(stream.feeder_pid))) end
     if not stream then
         self:log("stream: " .. tostring(err) .. "; falling back to one player per utterance")
         self.stream_mode = false
@@ -291,9 +299,11 @@ end
 function Player:prepare_timeline(utt)
     if utt.timeline then return end
     local doc = self.ui.document
+    local t0 = audio.now()
     local cre = segment.utterance_words(doc, utt)
     local aligned = segment.align(cre, utt.words or {})
     utt.timeline = segment.timeline(utt.words or {}, aligned)
+    self:log(("utterance %d: timeline of %d words in %.2fs"):format(utt.id, #utt.timeline, audio.now() - t0))
     local missing = 0
     for i = 1, #(utt.words or {}) do if not aligned[i] then missing = missing + 1 end end
     if missing > 0 then self:log(("utterance %d: %d of %d words unplaced"):format(utt.id, missing, #utt.words)) end

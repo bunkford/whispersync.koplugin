@@ -19,7 +19,7 @@ local M = {}
 -- An utterance is one request to the service. Long ones read most naturally
 -- (one prosodic arc, few seams) and the stream plays them back to back; the
 -- first is kept short so the voice starts within a few seconds.
-M.MAX_UTTERANCE_BYTES = 3000       -- ~3 minutes of speech; the service caps requests near 4 KB
+M.MAX_UTTERANCE_BYTES = 2000       -- ~2 minutes of speech; the service caps requests near 4 KB
 M.MAX_UTTERANCE_SENTENCES = 40
 M.FIRST_UTTERANCE_BYTES = 500
 M.MAX_WORDS_PER_SENTENCE = 400
@@ -93,21 +93,22 @@ function M.sentences_from(doc, xp, budget_bytes, max)
     local out, total = {}, 0
     local s = M.first_word_start(doc, xp)
     local cur_words, cur_xp0 = {}, nil
+    local cur_word_list = {}   -- { xp0, xp1, text } per word, kept on the sentence for alignment
     local words_in_sentence = 0
     local function close(xp1, add_stop)
         if #cur_words == 0 then return end
         local text = trim(table.concat(cur_words))
         if text ~= "" then
             if add_stop and not M.ends_sentence(text) and not text:match("[,;:%-\226\128\148]$") then text = text .. "." end
-            out[#out + 1] = { xp0 = cur_xp0, xp1 = xp1, text = text }
+            out[#out + 1] = { xp0 = cur_xp0, xp1 = xp1, text = text, words = cur_word_list }
             total = total + #text
         end
-        cur_words, cur_xp0, words_in_sentence = {}, nil, 0
+        cur_words, cur_xp0, words_in_sentence, cur_word_list = {}, nil, 0, {}
     end
     local guard = 0
     while s and #out < max and total < budget_bytes do
         guard = guard + 1
-        if guard > 20000 then break end
+        if guard > 4000 then break end
         local eok, e = pcall(doc.getNextVisibleWordEnd, doc, s)
         if not eok or not e or e == "" then break end
         local tok, word = pcall(doc.getTextFromXPointers, doc, s, e)
@@ -121,6 +122,7 @@ function M.sentences_from(doc, xp, budget_bytes, max)
         end
         if not cur_xp0 then cur_xp0 = s end
         cur_words[#cur_words + 1] = word .. gap
+        if trim(word) ~= "" then cur_word_list[#cur_word_list + 1] = { xp0 = s, xp1 = e, text = trim(word) } end
         words_in_sentence = words_in_sentence + 1
         local paragraph_break = n and (gap:find("\n") or M.block_of(n) ~= M.block_of(s)) or false
         if not n then
@@ -285,11 +287,14 @@ function M.align(cre_words, spoken)
     return out
 end
 
---- Words for a whole utterance: its sentences' crengine words concatenated.
+--- Words for a whole utterance: the words recorded while its sentences were
+-- walked (no second pass over crengine), or a fresh walk for sentences that
+-- came without them.
 function M.utterance_words(doc, utterance)
     local all = {}
     for _, s in ipairs(utterance.sentences) do
-        for _, w in ipairs(M.words_between(doc, s.xp0, s.xp1)) do all[#all + 1] = w end
+        local ws = s.words or M.words_between(doc, s.xp0, s.xp1)
+        for _, w in ipairs(ws) do all[#all + 1] = w end
     end
     return all
 end

@@ -378,18 +378,22 @@ end
 M.STREAM_LEAD_IN = 0.5   -- seconds of silence the feeder sends first
 
 local FEEDER_SCRIPT = [[#!/bin/sh
-# readaloud feeder: pour queue/*.pcm into the fifo, in name order, forever.
-q="$1"; fifo="$2"
+# readaloud feeder: pour queue/*.pcm into the fifo, in name order, until the
+# .alive marker goes or the player it feeds has exited.
+q="$1"; fifo="$2"; player="$3"
 exec 3>"$fifo"
 dd if=/dev/zero bs=24000 count=1 2>/dev/null >&3
+# busybox sleep may not take fractions; usleep is on every Kindle.
+nap() { usleep 100000 2>/dev/null || sleep 1; }
 while [ -e "$q/.alive" ]; do
+  if [ -n "$player" ] && ! kill -0 "$player" 2>/dev/null; then break; fi
   f=$(ls "$q"/*.pcm 2>/dev/null | head -n 1)
   if [ -n "$f" ]; then
     echo "$(basename "$f")" >> "$q/started.log"
     cat "$f" >&3
     rm -f "$f"
   else
-    sleep 0.05
+    nap
   fi
 done
 exec 3>&-
@@ -448,7 +452,7 @@ function M.stream_start(plan, tmpdir)
     -- Reader and writer each block until the other opens the FIFO; both go
     -- to the background and meet there.
     local player_pid = spawn(cmd .. " < " .. sh_quote(fifo))
-    local feeder_pid = spawn("sh " .. sh_quote(script) .. " " .. sh_quote(dir) .. " " .. sh_quote(fifo))
+    local feeder_pid = player_pid and spawn("sh " .. sh_quote(script) .. " " .. sh_quote(dir) .. " " .. sh_quote(fifo) .. " " .. tostring(player_pid))
     if not player_pid or not feeder_pid then
         M.stream_stop({ dir = dir, player_pid = player_pid, feeder_pid = feeder_pid, plan = plan })
         return nil, "could not start the stream"

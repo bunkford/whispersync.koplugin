@@ -11,6 +11,8 @@ local sents, nxt = S.sentences_from(doc, "1s")
 H.eq(#sents, 3, "three sentences"); H.eq(sents[1].text, "It was a well-known fact.", "first sentence text with its full stop")
 H.eq(sents[2].text, "Nobody argued; 1,000 people nodded.", "semicolon does not split")
 H.eq(sents[2].xp0, "6s", "second sentence start"); H.eq(sents[3].xp1, "12e", "last sentence end"); H.eq(nxt, nil, "end of book")
+H.eq(#sents[1].words, 5, "words recorded while walking"); H.eq(sents[1].words[4].text, "well-known", "with their text"); H.eq(sents[1].words[4].xp1, "4e", "and xpointers")
+H.eq(#S.utterance_words(doc, { sentences = sents }), 12, "utterance words come from the recorded lists")
 -- from inside a word, that word is where reading starts
 local mid = S.sentences_from(doc, "3s")
 H.eq(mid[1].xp0, "3s", "starts at the word the position is in"); H.eq(mid[1].text, "a well-known fact.", "partial first sentence keeps its punctuation")
