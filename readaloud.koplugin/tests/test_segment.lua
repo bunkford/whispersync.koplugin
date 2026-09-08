@@ -1,60 +1,31 @@
 local H = require("helpers")
 local S = require("segment")
 
--- A fake crengine document: words w1..wN with xpointers "<i>s"/"<i>e";
--- sentences are given as word index ranges.
-local function fake_doc(words, sentences)
-    local d = { words = words, sentences = sentences }
-    local function idx(xp) return tonumber(xp:match("^(%d+)")) end
-    function d:compareXPointers(a, b)
-        local ia, ib = idx(a), idx(b)
-        local ka, kb = a:sub(-1), b:sub(-1)
-        local va, vb = ia * 2 + (ka == "e" and 1 or 0), ib * 2 + (kb == "e" and 1 or 0)
-        if va == vb then return 0 end
-        return vb > va and 1 or -1
-    end
-    function d:getNextVisibleWordStart(xp)
-        local i = idx(xp); local k = xp:sub(-1)
-        local n = k == "s" and i + 1 or i + 1
-        if n > #words then return nil end
-        return n .. "s"
-    end
-    function d:getNextVisibleWordEnd(xp)
-        local i = idx(xp); local k = xp:sub(-1)
-        local n = k == "s" and i or i + 1
-        if n > #words then return nil end
-        return n .. "e"
-    end
-    function d:getTextFromXPointers(a, b)
-        local t = {}
-        for i = idx(a), idx(b) do t[#t + 1] = words[i] end
-        return table.concat(t, " ")
-    end
-    function d:extendXPointersToSentenceSegment(a, b)
-        local i = idx(a)
-        for _, s in ipairs(sentences) do
-            if i >= s[1] and i <= s[2] then
-                return { pos0 = s[1] .. "s", pos1 = s[2] .. "e", text = self:getTextFromXPointers(s[1] .. "s", s[2] .. "e") }
-            end
-        end
-        return nil
-    end
-    return d
-end
+local fake_doc = require("fakedoc")
 
 local words = { "It", "was", "a", "well-known", "fact.", "Nobody", "argued;", "1,000", "people", "nodded.", "The", "end." }
 local doc = fake_doc(words, { { 1, 5 }, { 6, 10 }, { 11, 12 } })
 
--- sentences from the start
+-- sentences from the start: punctuation kept, split on terminal punctuation
 local sents, nxt = S.sentences_from(doc, "1s")
-H.eq(#sents, 3, "three sentences"); H.eq(sents[1].text, "It was a well-known fact.", "first sentence text")
+H.eq(#sents, 3, "three sentences"); H.eq(sents[1].text, "It was a well-known fact.", "first sentence text with its full stop")
+H.eq(sents[2].text, "Nobody argued; 1,000 people nodded.", "semicolon does not split")
 H.eq(sents[2].xp0, "6s", "second sentence start"); H.eq(sents[3].xp1, "12e", "last sentence end"); H.eq(nxt, nil, "end of book")
--- from the middle of a sentence, that sentence is whole
+-- from inside a word, that word is where reading starts
 local mid = S.sentences_from(doc, "3s")
-H.eq(mid[1].xp0, "1s", "sentence around the position, from its start")
--- budget stops early and hands back where to continue
+H.eq(mid[1].xp0, "3s", "starts at the word the position is in"); H.eq(mid[1].text, "a well-known fact.", "partial first sentence keeps its punctuation")
+H.eq(S.block_of("3s"), "", "non-crengine xpointers carry no paragraph information")
+-- budget stops at a sentence boundary and hands back where to continue
 local few, cont = S.sentences_from(doc, "1s", 10, 10)
 H.eq(#few, 1, "budget of 10 bytes: one sentence"); H.eq(cont, "6s", "continue at the next sentence")
+-- a paragraph break closes a sentence and an unpunctuated one gets a full stop
+local hdoc = fake_doc({ "CHAPTER", "1", "He", "woke", "up." }, {})
+hdoc.paragraph_after[2] = true
+local hs = S.sentences_from(hdoc, "1s")
+H.eq(#hs, 2, "heading and paragraph are two sentences"); H.eq(hs[1].text, "CHAPTER 1.", "heading gets a full stop so the voice pauses"); H.eq(hs[2].text, "He woke up.", "then the paragraph")
+H.eq(S.ends_sentence("Really?”"), true, "question mark before a closing quote ends a sentence"); H.eq(S.ends_sentence("well,"), false, "comma does not")
+H.eq(S.ends_sentence("wait…"), true, "ellipsis ends"); H.eq(S.block_of("/body/DocFragment[2]/body/p[7]/i[1]/text().4"), "/body/DocFragment[2]/body/p[7]", "block ignores inline italics")
+H.eq(S.block_of("/body/DocFragment[2]/body/p[8]/text().0") == S.block_of("/body/DocFragment[2]/body/p[7]/text().0"), false, "different paragraphs differ")
 -- words between
 local ws = S.words_between(doc, "1s", "5e")
 H.eq(#ws, 5, "five words in sentence 1"); H.eq(ws[4].text, "well-known", "word text"); H.eq(ws[5].xp1, "5e", "last word end")

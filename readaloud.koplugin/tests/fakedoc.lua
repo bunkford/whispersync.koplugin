@@ -11,7 +11,18 @@ return function(words, sentences, page)
     end
     function d:getNextVisibleWordStart(xp) local n = idx(xp) + 1; if n > #words then return nil end; return n .. "s" end
     function d:getNextVisibleWordEnd(xp) local i = idx(xp); local n = xp:sub(-1) == "s" and i or i + 1; if n > #words then return nil end; return n .. "e" end
-    function d:getTextFromXPointers(a, b) local t = {}; for i = idx(a), idx(b) do t[#t + 1] = words[i] end; return table.concat(t, " ") end
+    function d:getPrevVisibleWordStart(xp) local i = idx(xp); local n = xp:sub(-1) == "e" and i or i - 1; if n < 1 then return nil end; return n .. "s" end
+    -- Text of a range. Words carry their own punctuation; the text between
+    -- word i's end and word i+1's start is a space, or a newline at a
+    -- paragraph boundary (d.paragraph_after[i] = true).
+    d.paragraph_after = d.paragraph_after or {}
+    function d:getTextFromXPointers(a, b)
+        local ia, ib = idx(a), idx(b)
+        if a:sub(-1) == "e" and b:sub(-1) == "s" and ib == ia + 1 then return self.paragraph_after[ia] and "\n" or " " end
+        local t = {}
+        for i = ia, ib do t[#t + 1] = words[i] end
+        return table.concat(t, " ")
+    end
     function d:extendXPointersToSentenceSegment(a)
         local i = idx(a)
         for _, s in ipairs(sentences) do

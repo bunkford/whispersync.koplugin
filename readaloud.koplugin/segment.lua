@@ -30,74 +30,110 @@ M.MAX_WORDS_PER_SENTENCE = 400
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
---- The sentence around xpointer `xp`: { xp0, xp1, text } or nil.
-function M.sentence_at(doc, xp)
-    if not xp then return nil end
-    local ok, seg = pcall(doc.extendXPointersToSentenceSegment, doc, xp, xp)
-    if ok and type(seg) == "table" and seg.pos0 and seg.pos1 then
-        local text = seg.text
-        if type(text) ~= "string" then
-            local tok, t = pcall(doc.getTextFromXPointers, doc, seg.pos0, seg.pos1)
-            text = tok and t or ""
-        end
-        return { xp0 = seg.pos0, xp1 = seg.pos1, text = trim(text or "") }
-    end
-    -- Fallback: the single word at xp.
-    local eok, e = pcall(doc.getNextVisibleWordEnd, doc, xp)
-    if eok and e then
-        local tok, t = pcall(doc.getTextFromXPointers, doc, xp, e)
-        return { xp0 = xp, xp1 = e, text = trim(tok and t or "") }
-    end
-    return nil
+-- Sentence-ending punctuation, optionally followed by closing quotes/brackets.
+local SENTENCE_END = "[%.!%?\226\128\166][\"'\226\128\152-\226\128\157%)%]]*$"
+
+--- Does this text end a sentence? (trailing whitespace ignored)
+function M.ends_sentence(text)
+    text = (text or ""):gsub("%s+$", "")
+    if text == "" then return false end
+    -- ASCII closers and Unicode closing quotes (U+2018-U+201D) after . ! ? or an ellipsis
+    text = text:gsub("[\"'%)%]]+$", ""):gsub("\226\128[\152-\157]$", "")
+    local last = text:sub(-1)
+    if last == "." or last == "!" or last == "?" then return true end
+    return text:sub(-3) == "\226\128\166" -- …
 end
 
---- The first word start at or after `xp`.
+--- The block (paragraph) an xpointer belongs to: its path without the text
+-- node offset and without common inline wrappers, so a word inside <i> in
+-- the same paragraph compares equal to its neighbours.
+function M.block_of(xp)
+    if type(xp) ~= "string" then return "" end
+    local b = xp:match("^(.*)/text%(%)%.%d+$")
+    if not b then return "" end -- not a crengine text xpointer: no paragraph information
+    for _ = 1, 3 do
+        local stripped = b:gsub("/[ibusq]%[%d+%]$", ""):gsub("/[ibusq]$", "")
+            :gsub("/[%a]-(em|strong|span|a|small|sup|sub|code|cite|abbr|mark|font)%[%d+%]$", "")
+            :gsub("/(em|strong|span|a|small|sup|sub|code|cite|abbr|mark|font)$", "")
+        if stripped == b then break end
+        b = stripped
+    end
+    return b
+end
+
+--- Start of the word at or after `xp` (a page-top xpointer may sit inside a
+-- word or on an element).
+function M.first_word_start(doc, xp)
+    local eok, e = pcall(doc.getNextVisibleWordEnd, doc, xp)
+    if eok and e and e ~= "" then
+        local sok, st = pcall(doc.getPrevVisibleWordStart, doc, e)
+        if sok and st and st ~= "" then return st end
+    end
+    return M.word_start_after(doc, xp)
+end
+
+--- The first word start strictly after `xp`.
 function M.word_start_after(doc, xp)
     local ok, nxt = pcall(doc.getNextVisibleWordStart, doc, xp)
     if ok and nxt and nxt ~= "" then return nxt end
     return nil
 end
 
---- Sentences starting at `xp`, until `budget_bytes` of text or `max` sentences.
--- Returns list of { xp0, xp1, text } and the xpointer where the next call
--- should continue (nil at the end of the book).
+--- Sentences starting at `xp`, until `budget_bytes` of text or `max`
+-- sentences. Built from crengine's word navigation: each word plus the text
+-- between it and the next word (punctuation, spaces), so what is spoken has
+-- its full stops, and a sentence closes on terminal punctuation or when the
+-- next word is in another paragraph (a heading or an unpunctuated paragraph
+-- then gets a full stop, so the voice pauses there).
+-- Returns list of { xp0, xp1, text } and the xpointer to continue from
+-- (nil at the end of the book).
 function M.sentences_from(doc, xp, budget_bytes, max)
-    budget_bytes = budget_bytes or M.MAX_UTTERANCE_BYTES * 3
-    max = max or M.MAX_UTTERANCE_SENTENCES * 3
+    budget_bytes = budget_bytes or M.MAX_UTTERANCE_BYTES
+    max = max or M.MAX_UTTERANCE_SENTENCES
     local out, total = {}, 0
-    local cur = xp
-    local guard = 0
-    while cur and #out < max and total < budget_bytes do
-        guard = guard + 1
-        if guard > max * 4 then break end
-        local s = M.sentence_at(doc, cur)
-        if not s then break end
-        -- Never go backwards or stand still.
-        local last = out[#out]
-        if last then
-            local cok, cmp = pcall(doc.compareXPointers, doc, last.xp1, s.xp1)
-            if not cok or not cmp or cmp <= 0 then
-                -- s ends at or before the previous one: step a word forward instead
-                local step = M.word_start_after(doc, last.xp1)
-                if not step or step == cur then break end
-                cur = step
-                s = nil
-            end
+    local s = M.first_word_start(doc, xp)
+    local cur_words, cur_xp0 = {}, nil
+    local words_in_sentence = 0
+    local function close(xp1, add_stop)
+        if #cur_words == 0 then return end
+        local text = trim(table.concat(cur_words))
+        if text ~= "" then
+            if add_stop and not M.ends_sentence(text) and not text:match("[,;:%-\226\128\148]$") then text = text .. "." end
+            out[#out + 1] = { xp0 = cur_xp0, xp1 = xp1, text = text }
+            total = total + #text
         end
-        if s then
-            if s.text ~= "" then
-                out[#out + 1] = s
-                total = total + #s.text
-            end
-            local nxt = M.word_start_after(doc, s.xp1)
-            if not nxt or nxt == cur then
-                cur = nil
-            else
-                cur = nxt
-            end
-        end
+        cur_words, cur_xp0, words_in_sentence = {}, nil, 0
     end
-    return out, cur
+    local guard = 0
+    while s and #out < max and total < budget_bytes do
+        guard = guard + 1
+        if guard > 20000 then break end
+        local eok, e = pcall(doc.getNextVisibleWordEnd, doc, s)
+        if not eok or not e or e == "" then break end
+        local tok, word = pcall(doc.getTextFromXPointers, doc, s, e)
+        word = tok and type(word) == "string" and word or ""
+        local n = M.word_start_after(doc, e)
+        local gap = ""
+        if n then
+            local gok, g = pcall(doc.getTextFromXPointers, doc, e, n)
+            gap = gok and type(g) == "string" and g or " "
+            if gap == "" then gap = " " end
+        end
+        if not cur_xp0 then cur_xp0 = s end
+        cur_words[#cur_words + 1] = word .. gap
+        words_in_sentence = words_in_sentence + 1
+        local paragraph_break = n and (gap:find("\n") or M.block_of(n) ~= M.block_of(s)) or false
+        if not n then
+            close(e, true)
+        elseif M.ends_sentence(word .. gap) or paragraph_break or words_in_sentence >= M.MAX_WORDS_PER_SENTENCE then
+            close(e, paragraph_break)
+        end
+        s = n
+    end
+    -- Whatever is still open is a partial sentence at the budget edge: the
+    -- next call continues from its first word rather than mid-sentence.
+    if #cur_words > 0 then s = cur_xp0 end
+    return out, s
 end
 
 --- The words crengine sees between two xpointers: { xp0, xp1, text }.
