@@ -3,6 +3,20 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.1
+
+Punctuation reaches the voice.
+
+- **Real sentences.** KOReader's sentence-segment call only grabs punctuation
+  around an existing selection; given a single point it returns nothing, so
+  the plugin had been falling back to one word per "sentence", joined by
+  spaces with the punctuation dropped, and capping each request at forty
+  words. Sentences are now built from crengine's word navigation, keeping the
+  text between words, so full stops, question marks, quotes and paragraph
+  breaks all reach the voice, and requests carry the intended three minutes
+  of text. Headings and unpunctuated paragraphs get a full stop so the voice
+  pauses at them.
+
 ## 0.2.0
 
 Narration that flows.
