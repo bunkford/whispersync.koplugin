@@ -3,6 +3,20 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.2
+
+Fixes a freeze while "Fetching audio…" that needed a power cycle.
+
+- The stream feeder paused with a fractional `sleep`, which busybox on Kindle
+  can refuse, leaving the feeder spinning at full speed. It now uses `usleep`
+  (with a whole-second fallback) and exits on its own when the player it feeds
+  has gone.
+- The word walk over crengine happens once per group, and the words it finds
+  are reused for the marker timeline instead of walking again. Groups are
+  built one per tick and capped at ~2000 bytes, so the UI never stalls for
+  more than a fraction of a second.
+- The log records how long each walk, timeline and stream start took.
+
 ## 0.2.1
 
 Punctuation reaches the voice.
