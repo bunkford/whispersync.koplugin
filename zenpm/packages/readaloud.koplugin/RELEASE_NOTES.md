@@ -3,6 +3,19 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.1.5
+
+Sound on Kindle.
+
+- **A bundled MP3 decoder.** Kindle firmware has no MP3 decoder and Amazon's
+  player will not take one, while the Edge service only ever sends MP3. The
+  plugin now ships `bin/mp3dec`, a static build of the public-domain minimp3
+  for both Kindle ABIs (hard-float and the older soft-float), under half a
+  megabyte each. Each utterance is decoded to PCM in the background as soon
+  as it arrives and plays through the same GStreamer path as the test tone.
+- With the decoder present, MP3 is asked for first, so no time is spent on
+  formats the service refuses.
+
 ## 0.1.4
 
 - **Amazon's player is asked four ways.** When MP3 goes to playermgr over

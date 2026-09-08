@@ -67,10 +67,11 @@ second of delay, which is already accounted for; different headphones differ.
   pipeline plays raw PCM through it, the path the
   [audiobook.koplugin](https://github.com/stradichenko/audiobook.koplugin)
   project established on Paperwhite 5/6 hardware. Kindle's GStreamer has no
-  MP3 decoder, so the plugin asks the service for raw 24 kHz PCM; if the
-  service ever refuses that, MP3 is played through Amazon's own player
-  (`playermgr` over LIPC), or decoded by an `ffmpeg` binary when one is
-  present (the audiobook plugin bundles one). *Audio → Audio output details*
+  MP3 decoder and the service only sends MP3, so the plugin bundles one:
+  `bin/mp3dec`, a static build of the public-domain minimp3 for both Kindle
+  ABIs (source in `tools/mp3dec/`). Each utterance is decoded to PCM in the
+  background as it arrives. An `ffmpeg` binary (the audiobook plugin bundles
+  one) or Amazon's own player (`playermgr` over LIPC) are the fallbacks. *Audio → Audio output details*
   shows what was detected, *Play a test tone* proves the pipeline, and *Voice →
   Test the voice* reports exactly what the service returned.
 
