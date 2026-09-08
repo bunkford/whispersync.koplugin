@@ -3,6 +3,21 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.5
+
+The freeze, found and fixed.
+
+- **Starting the stream deadlocked KOReader.** The stream player is launched
+  with its input on a FIFO, which blocks until the feeder opens the other
+  end, and the feeder was launched only after the player's launch returned;
+  the launch itself waited on a pipe the blocked shell still held. The log
+  from 0.2.4 showed the UI stopping at exactly that step while the fetch
+  child carried on. Background jobs are now started with their standard
+  streams detached before they run, so nothing can hold that pipe, and a
+  test launches a job blocked on a FIFO to prove the caller returns at once.
+  The same launch path is used for every player, so the per-utterance path
+  can no longer stall the UI for the length of a clip either.
+
 ## 0.2.4
 
 - **The fetch is traced end to end.** The log now records when each fetch
