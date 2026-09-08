@@ -36,6 +36,9 @@ function Player.new(opts)
     self.cur = 0
     self.seq = 0
     self.format_index = 1
+    -- One continuous PCM stream where the backend allows it (gapless); else
+    -- one player process per utterance.
+    self.stream_mode = audio.stream_supported and audio.stream_supported(opts.plan or {}) or false
     -- Start with the format a previous session found the service honours.
     local remembered = opts.settings and opts.settings().format
     for i, fmt in ipairs(opts.plan and opts.plan.formats or {}) do
@@ -75,10 +78,11 @@ function Player:fill()
     local guard = 0
     while self.cursor and (#self.utterances - math.max(self.cur, 1)) < QUEUE_AHEAD and guard < 4 do
         guard = guard + 1
-        local sentences, nxt = segment.sentences_from(doc, self.cursor, segment.MAX_UTTERANCE_BYTES, segment.MAX_UTTERANCE_SENTENCES)
+        local budget = #self.utterances == 0 and segment.FIRST_UTTERANCE_BYTES or segment.MAX_UTTERANCE_BYTES
+        local sentences, nxt = segment.sentences_from(doc, self.cursor, budget, segment.MAX_UTTERANCE_SENTENCES)
         self.cursor = nxt
         if #sentences == 0 then break end
-        for _, g in ipairs(segment.group(sentences)) do
+        for _, g in ipairs(segment.group(sentences, budget, segment.MAX_UTTERANCE_SENTENCES)) do
             self.seq = self.seq + 1
             g.id = self.seq
             g.status = "pending"
@@ -223,6 +227,63 @@ function Player:collect()
 end
 
 -------------------------------------------------------------------------------
+-- continuous stream (gapless)
+-------------------------------------------------------------------------------
+
+local function is_pcm(fmt)
+    return fmt == edge.FORMATS.pcm or fmt == edge.FORMATS.wav
+end
+
+function Player:ensure_stream()
+    if self.stream then return self.stream end
+    local stream, err = audio.stream_start(self.opts.plan, self.opts.tmpdir)
+    if not stream then
+        self:log("stream: " .. tostring(err) .. "; falling back to one player per utterance")
+        self.stream_mode = false
+        return nil
+    end
+    self.stream = stream
+    return stream
+end
+
+--- Queue an utterance on the stream, `skip` seconds in. Sets utt.start_at.
+function Player:enqueue(utt, skip)
+    local stream = self:ensure_stream()
+    if not stream then return false end
+    skip = math.max(0, skip or 0)
+    local now = audio.now()
+    local plays_at = audio.stream_schedule(stream.last_end, now, stream.latency)
+    local skip_bytes = math.floor(skip * audio.PCM_RATE) * 2 + (utt.format == edge.FORMATS.wav and 44 or 0)
+    local ok, err = audio.stream_enqueue(stream, utt.file, skip_bytes)
+    if not ok then
+        self:log("stream: " .. tostring(err))
+        return false
+    end
+    utt.start_at = plays_at - skip
+    utt.queued = true
+    stream.last_end = plays_at + math.max(0, (utt.duration or 0) - skip)
+    return true
+end
+
+--- Queue every ready utterance from `from` onwards, in order, until one is not ready.
+function Player:enqueue_ready(from, first_skip)
+    for i = from, #self.utterances do
+        local u = self.utterances[i]
+        if u.status ~= "ready" or not is_pcm(u.format) then break end
+        if not u.queued then
+            self:prepare_timeline(u)
+            if not self:enqueue(u, i == from and first_skip or 0) then break end
+        end
+    end
+end
+
+--- Tear the stream down; everything must be re-queued afterwards.
+function Player:drop_stream()
+    if self.stream then audio.stream_stop(self.stream); self.stream = nil end
+    for _, u in ipairs(self.utterances) do u.queued = false; u.start_at = nil end
+end
+
+-------------------------------------------------------------------------------
 -- playback
 -------------------------------------------------------------------------------
 
@@ -242,6 +303,24 @@ function Player:play_current(seek)
     local utt = self.utterances[self.cur]
     if not utt or utt.status ~= "ready" then return false end
     self:prepare_timeline(utt)
+    if self.stream_mode and not is_pcm(utt.format) then
+        self:log("stream: utterance is not PCM (" .. tostring(utt.format) .. "); using one player per utterance")
+        self:drop_stream()
+        self.stream_mode = false
+    end
+    if self.stream_mode then
+        if not utt.queued then
+            self:enqueue_ready(self.cur, seek or 0)
+        end
+        if not utt.queued then
+            self:set_state("error", "could not queue audio")
+            return false
+        end
+        self.word_index = nil
+        self:set_state("playing")
+        self:update_highlight(utt, audio.now() - utt.start_at)
+        return true
+    end
     if self.handle then audio.stop(self.handle); self.handle = nil end
     local handle, err = audio.start(self.opts.plan, utt.file, utt.format, seek or 0, self.opts.tmpdir)
     if not handle then
@@ -304,6 +383,20 @@ function Player:tick()
             else
                 self:fetch_next()
             end
+        elseif self.state == "playing" and utt and self.stream_mode then
+            -- Keep the queue topped up; anything fetched since last tick goes on now.
+            self:enqueue_ready(self.cur)
+            local pos = audio.now() - (utt.start_at or audio.now())
+            if pos >= 0 then self:update_highlight(utt, pos) end
+            if pos >= (utt.duration or 0) + 0.05 then
+                self:advance()
+            elseif pos > 2 and self.stream and not audio.stream_running(self.stream) then
+                -- The player died under us: rebuild the stream from here.
+                self:log("stream: player exited; restarting from " .. ("%.1f"):format(pos))
+                self:drop_stream()
+                self:enqueue_ready(self.cur, pos)
+                if not utt.queued then self:set_state("error", "audio stream stopped") end
+            end
         elseif self.state == "playing" and utt then
             local pos = audio.position(self.handle)
             self:update_highlight(utt, pos)
@@ -336,7 +429,12 @@ function Player:advance()
         return
     end
     if utt.status == "ready" then
-        self:play_current(0)
+        if self.stream_mode and utt.queued then
+            self.word_index = nil
+            self:set_state("playing")
+        else
+            self:play_current(0)
+        end
     else
         self:set_state("preparing")
     end
@@ -368,10 +466,17 @@ end
 
 function Player:pause()
     if self.state ~= "playing" then return end
-    local pos = math.max(0, audio.position(self.handle))
-    self.paused_at = pos
-    audio.stop(self.handle)
-    self.handle = nil
+    local utt = self.utterances[self.cur]
+    local pos
+    if self.stream_mode then
+        pos = utt and utt.start_at and (audio.now() - utt.start_at) or 0
+        self:drop_stream()
+    else
+        pos = audio.position(self.handle)
+        audio.stop(self.handle)
+        self.handle = nil
+    end
+    self.paused_at = math.max(0, math.min(pos, (utt and utt.duration) or pos))
     self:set_state("paused")
 end
 
@@ -399,6 +504,7 @@ end
 function Player:skip(delta)
     if self.state == "idle" then return end
     if self.handle then audio.stop(self.handle); self.handle = nil end
+    if self.stream_mode then self:drop_stream() end
     local target = math.max(1, self.cur + delta)
     -- Utterances behind us were dropped from disk; refetch them.
     for i = target, self.cur do
@@ -421,6 +527,7 @@ end
 
 function Player:stop_audio_only()
     if self.handle then audio.stop(self.handle); self.handle = nil end
+    if self.stream then audio.stream_stop(self.stream); self.stream = nil end
 end
 
 function Player:stop()
@@ -457,7 +564,7 @@ function Player:status_text()
         return "Preparing…"
     elseif self.state == "playing" then
         local ahead = 0
-        for i = self.cur + 1, #self.utterances do if self.utterances[i].status == "ready" then ahead = ahead + 1 end end
+        for i = self.cur + 1, #self.utterances do if self.utterances[i].status == "ready" or self.utterances[i].queued then ahead = ahead + 1 end end
         return (self:settings().voice or ""):gsub("Neural$", ""):gsub("^en%-%u%u%-", "") .. (ahead > 0 and "" or " · buffering")
     elseif self.state == "paused" then
         return "Paused"

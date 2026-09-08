@@ -16,8 +16,12 @@ Everything that needs a document takes it as a parameter (a fake in tests);
 
 local M = {}
 
-M.MAX_UTTERANCE_BYTES = 900   -- ~50-60 s of speech; the service answers in a second or two
-M.MAX_UTTERANCE_SENTENCES = 8
+-- An utterance is one request to the service. Long ones read most naturally
+-- (one prosodic arc, few seams) and the stream plays them back to back; the
+-- first is kept short so the voice starts within a few seconds.
+M.MAX_UTTERANCE_BYTES = 3000       -- ~3 minutes of speech; the service caps requests near 4 KB
+M.MAX_UTTERANCE_SENTENCES = 40
+M.FIRST_UTTERANCE_BYTES = 500
 M.MAX_WORDS_PER_SENTENCE = 400
 
 -------------------------------------------------------------------------------

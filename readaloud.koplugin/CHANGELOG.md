@@ -3,6 +3,22 @@
 Release notes for the Read Aloud (Edge voices) KOReader plugin. The newest
 release is first; ZenPM shows this file as the package's release notes.
 
+## 0.2.0
+
+Narration that flows.
+
+- **One continuous stream.** Playback is now a single audio pipeline fed
+  from a queue: sentence groups are decoded as they arrive and poured into
+  it back to back, so there is no process start-up, no silence padding and
+  no gap between groups. Pause and skip rebuild the stream from the exact
+  point.
+- **Longer sentence groups.** After a short first group (so the voice starts
+  within seconds), each request to the service carries up to about three
+  minutes of text, which the voice reads as one arc instead of many short
+  takes.
+- The marker clock is derived from the stream schedule, so it stays in step
+  across group boundaries.
+
 ## 0.1.5
 
 Sound on Kindle.

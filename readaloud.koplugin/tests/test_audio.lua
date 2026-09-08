@@ -57,6 +57,14 @@ local prep = A.prepare_pcm_command("/in.pcm", "/out.pcm", 2, false)
 H.eq(prep, "( dd if=/dev/zero bs=24000 count=1 2>/dev/null; tail -c +96001 '/in.pcm'; dd if=/dev/zero bs=48000 count=1 2>/dev/null ) > '/out.pcm' 2>/dev/null", "padded raw file command")
 H.ok(A.prepare_pcm_command("/in.wav", "/o", 0, true):find("tail %-c %+45 "), "wav header skipped")
 
+-- Continuous stream: player commands read PCM from stdin; scheduling is gapless
+H.eq(A.stream_supported(k1), true, "kindle-gst streams"); H.eq(A.stream_supported({ backend = "kindle-lipc" }), false, "lipc cannot")
+H.eq(A.stream_command(k1), "gst-launch-1.0 fdsrc fd=0 do-timestamp=true ! capsfilter caps='audio/x-raw,format=S16LE,rate=24000,channels=1,layout=interleaved' ! mixersink stream-type=Music sync=true", "gst stream pipeline reads the fifo on stdin")
+H.ok(A.stream_command(A.plan(env(false, { "ffplay" }))):find("%-f s16le %-ar 24000 %-ac 1 %-i pipe:0"), "ffplay stream command")
+H.eq(A.stream_schedule(nil, 100, 1.7), 101.2, "first file: after the output latency minus the feeder's own lead-in")
+H.eq(A.stream_schedule(130, 100, 1.7), 130, "queued behind what is already playing: no gap")
+H.eq(A.stream_schedule(100.5, 100, 1.7), 101.2, "queue nearly dry: the later of the two")
+
 -- Position accounts for seek and latency
 local h = { started = A.now() - 10, seek = 5, latency = 1.5 }
 H.near(A.position(h), 13.5, 0.05, "position = seek + elapsed - latency")

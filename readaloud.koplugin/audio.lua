@@ -363,4 +363,144 @@ function M.test_tone_pcm(seconds)
     return table.concat(out)
 end
 
+
+-------------------------------------------------------------------------------
+-- continuous stream
+-------------------------------------------------------------------------------
+--
+-- Gapless playback: one player process reads raw PCM from a FIFO for the
+-- whole session, and a small shell "feeder" pours queued PCM files into that
+-- FIFO in order. Utterances therefore run into each other with no process
+-- start-up and no silence padding between them; the pipe's own back-pressure
+-- (the sink consumes in real time) paces the feeder. Files are hard-linked
+-- into the queue, so the originals stay for pause/seek.
+
+M.STREAM_LEAD_IN = 0.5   -- seconds of silence the feeder sends first
+
+local FEEDER_SCRIPT = [[#!/bin/sh
+# readaloud feeder: pour queue/*.pcm into the fifo, in name order, forever.
+q="$1"; fifo="$2"
+exec 3>"$fifo"
+dd if=/dev/zero bs=24000 count=1 2>/dev/null >&3
+while [ -e "$q/.alive" ]; do
+  f=$(ls "$q"/*.pcm 2>/dev/null | head -n 1)
+  if [ -n "$f" ]; then
+    echo "$(basename "$f")" >> "$q/started.log"
+    cat "$f" >&3
+    rm -f "$f"
+  else
+    sleep 0.05
+  fi
+done
+exec 3>&-
+]]
+
+--- Can this plan play a continuous PCM stream?
+function M.stream_supported(plan)
+    return plan.backend == "kindle-gst" or plan.backend == "ffplay" or plan.backend == "aplay"
+        or plan.backend == "paplay" or plan.backend == "mpv"
+end
+
+--- The player command that reads s16le mono PCM from stdin.
+function M.stream_command(plan)
+    if plan.backend == "kindle-gst" then
+        return ("%s fdsrc fd=0%s ! capsfilter caps=%s ! mixersink stream-type=Music sync=true")
+            :format(plan.gst, plan.gst == "gst-launch-1.0" and " do-timestamp=true" or "",
+                sh_quote(M.gst_caps(plan.gst, M.PCM_RATE, 1)))
+    elseif plan.backend == "ffplay" then
+        return ("ffplay -nodisp -loglevel error -f s16le -ar %d -ac 1 -i pipe:0"):format(M.PCM_RATE)
+    elseif plan.backend == "mpv" then
+        return ("mpv --no-video --really-quiet --demuxer=rawaudio --demuxer-rawaudio-rate=%d --demuxer-rawaudio-channels=1 -"):format(M.PCM_RATE)
+    elseif plan.backend == "paplay" then
+        return ("paplay --raw --format=s16le --rate=%d --channels=1 /dev/stdin"):format(M.PCM_RATE)
+    elseif plan.backend == "aplay" then
+        return ("aplay -q -t raw -f S16_LE -r %d -c 1"):format(M.PCM_RATE)
+    end
+    return nil, "no streaming player for " .. tostring(plan.backend)
+end
+
+local function spawn(cmd)
+    local p = io.popen("sh -c " .. sh_quote(cmd .. " >/dev/null 2>&1") .. " & echo $!")
+    if not p then return nil end
+    local pid = tonumber((p:read("*a") or ""):match("%d+"))
+    p:close()
+    return pid
+end
+
+--- Start the stream. Returns { dir, fifo, feeder_pid, player_pid, started, latency, seq }.
+function M.stream_start(plan, tmpdir)
+    local cmd, err = M.stream_command(plan)
+    if not cmd then return nil, err end
+    local dir = (tmpdir or "/tmp") .. "/readaloud-stream"
+    os.execute("rm -rf " .. sh_quote(dir) .. "; mkdir -p " .. sh_quote(dir))
+    local fifo = dir .. "/audio.fifo"
+    local ok = os.execute("mkfifo " .. sh_quote(fifo) .. " 2>/dev/null")
+    if not (ok == 0 or ok == true) then return nil, "cannot create a FIFO in " .. dir end
+    local script = dir .. "/feeder.sh"
+    local f = io.open(script, "wb")
+    if not f then return nil, "cannot write the feeder script" end
+    f:write(FEEDER_SCRIPT); f:close()
+    local alive = io.open(dir .. "/.alive", "wb"); if alive then alive:close() end
+    if plan.backend == "kindle-gst" then
+        kindle_focus()
+        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+    end
+    -- Reader and writer each block until the other opens the FIFO; both go
+    -- to the background and meet there.
+    local player_pid = spawn(cmd .. " < " .. sh_quote(fifo))
+    local feeder_pid = spawn("sh " .. sh_quote(script) .. " " .. sh_quote(dir) .. " " .. sh_quote(fifo))
+    if not player_pid or not feeder_pid then
+        M.stream_stop({ dir = dir, player_pid = player_pid, feeder_pid = feeder_pid, plan = plan })
+        return nil, "could not start the stream"
+    end
+    return { dir = dir, fifo = fifo, player_pid = player_pid, feeder_pid = feeder_pid, plan = plan,
+             started = M.now(), latency = plan.latency or 0, seq = 0 }
+end
+
+--- Queue a PCM file (from `skip_bytes` in) to play after whatever is queued.
+-- Returns the queued path or nil, err.
+function M.stream_enqueue(stream, pcm_file, skip_bytes)
+    stream.seq = stream.seq + 1
+    local dst = ("%s/%06d.pcm"):format(stream.dir, stream.seq)
+    skip_bytes = skip_bytes or 0
+    local ok
+    if skip_bytes > 0 then
+        -- whole frames only, so a mid-sample start does not turn into noise
+        skip_bytes = skip_bytes - skip_bytes % 2
+        ok = os.execute(("tail -c +%d %s > %s 2>/dev/null"):format(skip_bytes + 1, sh_quote(pcm_file), sh_quote(dst .. ".tmp")))
+    else
+        ok = os.execute("ln " .. sh_quote(pcm_file) .. " " .. sh_quote(dst .. ".tmp") .. " 2>/dev/null || cp " .. sh_quote(pcm_file) .. " " .. sh_quote(dst .. ".tmp"))
+    end
+    if not (ok == 0 or ok == true) then return nil, "cannot queue " .. pcm_file end
+    os.rename(dst .. ".tmp", dst)
+    return dst
+end
+
+function M.stream_running(stream)
+    if not stream or not stream.player_pid then return false end
+    local ok = os.execute("kill -0 " .. stream.player_pid .. " 2>/dev/null")
+    return ok == 0 or ok == true
+end
+
+function M.stream_stop(stream)
+    if not stream then return end
+    if stream.dir then os.remove(stream.dir .. "/.alive") end
+    for _, pid in ipairs({ stream.feeder_pid, stream.player_pid }) do
+        if pid then os.execute("pkill -P " .. pid .. " 2>/dev/null; kill " .. pid .. " 2>/dev/null") end
+    end
+    if stream.plan and stream.plan.backend == "kindle-gst" then
+        os.execute("pkill -f 'mixersink stream-type=Music' 2>/dev/null")
+    end
+    if stream.dir then os.execute("rm -rf " .. sh_quote(stream.dir)) end
+end
+
+--- When a file queued now starts to sound: right after what is already
+-- queued, or, if the queue has run dry, after the output path's own delay.
+-- Pure, so the tests can pin it down.
+function M.stream_schedule(last_end, now, latency)
+    local gap_start = now + math.max(0, (latency or 0) - M.STREAM_LEAD_IN)
+    if last_end and last_end > gap_start then return last_end end
+    return gap_start
+end
+
 return M

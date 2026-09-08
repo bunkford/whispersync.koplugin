@@ -47,9 +47,10 @@ second of delay, which is already accounted for; different headphones differ.
 ## How it works
 
 - **Text.** crengine extends the current position to its sentence, walks
-  sentence by sentence, and later word by word. Up to eight sentences or ~900
-  bytes make one utterance, which is what the service is asked for at a time;
-  the next utterance is fetched while the current one plays.
+  sentence by sentence, and later word by word. A short first group, then
+  groups of up to ~3000 bytes (about three minutes of speech) make one
+  utterance each, which is what the service is asked for at a time; the next
+  is fetched while the current one plays.
 - **Voice.** The Edge read-aloud service (the one the Edge browser uses,
   documented by the [edge-tts](https://github.com/rany2/edge-tts) project) is
   a WebSocket that takes SSML and streams audio plus a `WordBoundary` event
@@ -64,7 +65,9 @@ second of delay, which is already accounted for; different headphones differ.
 - **Sound on Kindle.** Kindle firmware exposes no ALSA or PulseAudio; Bluetooth
   audio goes through Amazon's `audiomgrd`. The stock GStreamer's `mixersink`
   element feeds it, and a `gst-launch filesrc ! capsfilter ! mixersink`
-  pipeline plays raw PCM through it, the path the
+  pipeline plays raw PCM through it. Playback is one such pipeline for the
+  whole session, reading a FIFO that a small feeder script fills from a queue
+  of decoded utterances, so groups run together gaplessly. This is the path the
   [audiobook.koplugin](https://github.com/stradichenko/audiobook.koplugin)
   project established on Paperwhite 5/6 hardware. Kindle's GStreamer has no
   MP3 decoder and the service only sends MP3, so the plugin bundles one:

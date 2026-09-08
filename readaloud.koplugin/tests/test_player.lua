@@ -134,4 +134,49 @@ p3:tick(); p3:tick(); p3:tick()
 H.eq(p3.utterances[1].attempts, 2, "two attempts"); H.eq(p3.utterances[1].status, "done", "then given up and skipped")
 H.ok(notes[1] and notes[1]:find("refused"), "user told why")
 p3:stop()
+-- Gapless stream mode: PCM utterances are queued back to back on one stream.
+edge.synthesize = function(text, opts)
+    local ws = {}
+    local t = 0
+    for w in text:gmatch("%S+") do ws[#ws + 1] = { text = w:gsub("%.", ""), t0 = t, t1 = t + 0.4 }; t = t + 0.5 end
+    return { audio = string.rep("x", 48000 * t), words = ws, format = edge.FORMATS.pcm, duration = t }
+end
+local queued, streams = {}, 0
+audio.stream_start = function(plan) streams = streams + 1; return { started = clock, latency = 1.7, seq = 0, plan = plan } end
+audio.stream_enqueue = function(stream, file, skip) stream.seq = stream.seq + 1; queued[#queued + 1] = { file = file, skip = skip, at = clock }; return file end
+audio.stream_stop = function() end
+audio.stream_running = function() return true end
+clock = 1000
+doc.page = { 1, 10 }
+hl_calls = {}
+local ps = Player.new{
+    ui = ui, settings = function() return { voice = "v", speed = 1, highlight = "word" } end,
+    plan = { backend = "kindle-gst", gst = "gst-launch-1.0", formats = { edge.FORMATS.pcm }, latency = 1.7 }, tmpdir = os.getenv("TMPDIR") or "/tmp",
+    highlight = { show = function(_, a, b) hl_calls[#hl_calls + 1] = { a, b }; return "shown" end, clear = function() end },
+    log = function(m) logs[#logs + 1] = m end, notify = function() end, on_state = function() end,
+    uimanager = stubs["ui/uimanager"], json_decode = require("json").decode,
+}
+H.eq(ps.stream_mode, true, "gst plan streams")
+ps:start("1s"); ps:tick()
+H.eq(ps.state, "playing", "playing on the stream"); H.eq(streams, 1, "one stream started"); H.ok(#queued >= 1, "first utterance queued")
+local u1, u2 = ps.utterances[1], ps.utterances[2]
+H.near(u1.start_at, 1000 + 1.2, 0.01, "first utterance sounds after the output latency (lead-in excluded)")
+clock = 1000.5; ps:tick(); clock = 1001; ps:tick()
+H.ok(u2 and u2.queued, "second utterance queued while the first plays")
+H.near(u2.start_at, u1.start_at + u1.duration, 0.01, "and scheduled exactly at the first one's end: gapless")
+H.eq(#hl_calls, 0, "nothing marked before the audio can be heard")
+clock = u1.start_at + 0.6; ps:tick()
+H.eq(hl_calls[#hl_calls][1], "2s", "marker follows the stream clock")
+clock = u1.start_at + u1.duration + 0.1; ps:tick()
+H.eq(ps.cur, 2, "advanced into the already-queued utterance"); H.eq(ps.state, "playing", "without leaving the playing state"); H.eq(streams, 1, "still the same stream")
+-- pause tears the stream down; resume rebuilds it from the paused point
+clock = u2.start_at + 2.0
+ps:pause()
+H.eq(ps.state, "paused", "paused"); H.near(ps.paused_at, 2.0, 0.01, "position inside the second utterance")
+local before = #queued
+ps:resume()
+H.eq(streams, 2, "a fresh stream on resume"); H.ok(#queued > before, "re-queued")
+H.eq(queued[before + 1].skip, math.floor(1.6 * 24000) * 2, "skips into the file to 0.4 s before the pause point")
+H.near(u2.start_at, clock + 1.2 - 1.6, 0.01, "start_at set so the position reads 1.6 s at the first audible sample")
+ps:stop()
 H.done("test_player")
